@@ -58,23 +58,23 @@ def plot_aggregated_demand(flights: list[Flight], reghstart: int, reghend: int, 
     # Convert arrival times to minutes since midnight
     minutes = [f.arr_time.hour * 60 + f.arr_time.minute for f in flights]
     counter = Counter(minutes)
-    
+
     # Create arrays for all 1440 minutes in a day (24 * 60)
     minutes_range = np.arange(1440)  # 0 to 1439 minutes
     arrivals_per_minute = np.array([counter.get(m, 0) for m in minutes_range])
-    
+
     # Calculate cumulative arrivals
     cumulative_arrivals = np.cumsum(arrivals_per_minute)
     hours_range = minutes_range / 60
-    
+
     plt.figure(figsize=(10, 6))
     plt.plot(hours_range, cumulative_arrivals, linewidth=2, color="#0A7700", label="Aggregated demand")
-    
+
     # Regulation lines
     reg_start_min = int(reghstart * 60)
     reg_end_min = int(reghend * 60)
     y_start = cumulative_arrivals[reg_start_min]
-    
+
     # Reduced capacity line (red dashed)
     reduced_line = np.full_like(cumulative_arrivals, np.nan, dtype=float)
     for m in range(reg_start_min, reg_end_min + 1):
@@ -85,7 +85,7 @@ def plot_aggregated_demand(flights: list[Flight], reghstart: int, reghend: int, 
         color="red", linestyle="--", linewidth=2, label=f"{min_capacity}/hour capacity reduced"
     )
     y_reduced_end = reduced_line[reg_end_min]
-    
+
     # Nominal capacity line (garnet dotted)
     nominal_line = np.full_like(cumulative_arrivals, np.nan, dtype=float)
     intercepts = []
@@ -134,7 +134,7 @@ def plot_aggregated_demand(flights: list[Flight], reghstart: int, reghend: int, 
     print(f"Average delay per flight: {average_delay_minutes:.2f} minutes")
     plt.figtext(0.7, 0.04, f"Average delay per flight: {average_delay_minutes:.2f} minutes",
                 ha="center", fontsize=8, color="black")
-    
+
     plt.xlabel("Hour")
     plt.ylabel("Cumulative arrivals")
     plt.title("Aggregated demand - Cumulative arrivals per minute")

@@ -12,6 +12,6 @@ if not arrival_flights:
     print("There are no flights to display")
     exit(1)
 
-plot_aggregated_demand(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
 plot_flight_count(arrival_flights, max_capacity, HStart, HEnd)
+plot_aggregated_demand(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
 
