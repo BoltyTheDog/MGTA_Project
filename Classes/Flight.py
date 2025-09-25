@@ -31,4 +31,7 @@ class Flight:
                 f"Category: {self.cat}\n"
                 f"Seats No: {self.seats}\n")
 
+if __name__ == "__main__":
+    print("You're not executing the main program")
+
 

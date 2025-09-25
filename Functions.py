@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from Classes.Flight import Flight
 
-def initialiseflights(filename: str) -> list[Flight]:
+def initialise_flights(filename: str) -> list[Flight] | None:
     flights = []
     with open(filename, 'r') as r:
         next(r)
@@ -19,11 +19,17 @@ def initialiseflights(filename: str) -> list[Flight]:
                 flights.append(Flight(line_array[0], line_array[1], line_array[2], line_array[3],
                                       line_array[4], int(line_array[5]), dep_time, taxi_time,
                                       arr_time, flight_time, line_array[12], int(line_array[13])))
+    if len(flights) == 0:
+        return None
 
     return flights
 
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:
 
+    if reghstart < 0:
+        reghstart = 0
+    if reghend > 24:
+        reghend = 24
     hours = [f.arr_time.hour for f in flights]
 
     counter = Counter(hours)
@@ -46,3 +52,6 @@ def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, 
 
     plt.show()
     return None
+
+if __name__ == "__main__":
+    print("You're not executing the main program")
