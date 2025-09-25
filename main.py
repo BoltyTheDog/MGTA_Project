@@ -1,4 +1,4 @@
-from Functions import initialise_flights, plot_flight_count, plot_aggregated_demand
+from Functions import initialise_flights, plot_flight_count, plot_aggregated_demand, dime_cantidad_aerolinea_por_hora
 
 max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
@@ -15,3 +15,6 @@ if not arrival_flights:
 plot_flight_count(arrival_flights, max_capacity, HStart, HEnd)
 plot_aggregated_demand(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
 
+
+cantidadVLG = dime_cantidad_aerolinea_por_hora(arrival_flights, "VLG",10, 11)
+print(cantidadVLG)

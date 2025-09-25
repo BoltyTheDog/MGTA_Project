@@ -25,6 +25,16 @@ def initialise_flights(filename: str) -> list[Flight] | None:
 
     return flights
 
+
+def dime_cantidad_aerolinea_por_hora(listavuelo: list[Flight], airline: str, hora1: int, hora2:int) -> int:
+    counter = 0
+    for vuelo in listavuelo:
+        if vuelo.callsign[:3] == airline and hora1 <= vuelo.arr_time.hour <= hora2:
+            counter = counter + 1
+    return counter
+
+
+
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:
 
     if reghstart < 0:
@@ -47,9 +57,6 @@ def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, 
     plt.hlines(y=max_capacity, xmin=0, xmax=reghstart, colors="green", linewidth=2)
     plt.hlines(y=(max_capacity / 2), xmin=reghstart, xmax=reghend, colors="red", linewidth=2)
     plt.hlines(y=max_capacity, xmin=reghend, xmax=24, colors="green", linewidth=2)
-
-
-
 
     plt.show()
     return None
