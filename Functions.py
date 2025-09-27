@@ -1,29 +1,70 @@
 from collections import Counter
+import numpy as np
+
+def computeSlots(Hstart, Hend, HNoReg, PAAR, AAR):
+    """
+    Computes the slot matrix for airport regulation.
+    Each slot: [slot_time, flight_id, airline_id]
+    - slot_time: initial time of the slot (in minutes)
+    - flight_id: initially 0
+    - airline_id: initially 0
+
+    Parameters:
+    Hstart: int, start time in minutes
+    Hend: int, end time in minutes
+    HNoReg: int, end of regulation in minutes
+    PAAR: int, reduced capacity (slots per hour) during regulation
+    AAR: int, nominal capacity (slots per hour) after regulation
+
+    Returns:
+    slots: np.ndarray, shape (n_slots, 3)
+    """
+    slots = []
+    t = Hstart
+
+    # Regulation period: use PAAR
+    slot_interval_reg = 60 / PAAR
+    while t < HNoReg:
+        slots.append([int(round(t)), 0, 0])
+        t += slot_interval_reg
+
+    # Post-regulation period: use AAR
+    slot_interval_nom = 60 / AAR
+    while t < Hend:
+        slots.append([int(round(t)), 0, 0])
+        t += slot_interval_nom
+
+    return np.array(slots, dtype=int)
+
+
 import matplotlib.pyplot as plt
-from datetime import datetime
+from datetime import datetime,timedelta
 from Classes.Flight import Flight
 import numpy as np
 
-def initialise_flights(filename: str) -> list[Flight] | None:
+def initialise_flights(filename: str) -> list['Flight'] | None:
     flights = []
     with open(filename, 'r') as r:
-        next(r)
+        next(r)  # skip header
         for line in r:
-            line_array = line.split(";")
+            line_array = line.strip().split(",")  # remove newlines
             if line_array[3] == "LEBL":
                 dep_time = datetime.strptime(line_array[6], "%H:%M:%S")
                 arr_time = datetime.strptime(line_array[8], "%H:%M:%S")
-                taxi_time = datetime.strptime(line_array[7], "%M")
-                flight_time = datetime.strptime(line_array[11], "%H:%M:%S")
+                
+                taxi_time = timedelta(minutes=int(line_array[7]))
+                flight_time = datetime.strptime(line_array[10], "%H:%M:%S") 
+                flight_duration = timedelta(
+                    hours=flight_time.hour, minutes=flight_time.minute, seconds=flight_time.second
+                )
 
+                flights.append(Flight(
+                    line_array[0], line_array[1], line_array[2], line_array[3],
+                    line_array[4], int(line_array[5]), dep_time, taxi_time,
+                    arr_time, flight_duration, line_array[11], int(line_array[12])
+                ))
 
-                flights.append(Flight(line_array[0], line_array[1], line_array[2], line_array[3],
-                                      line_array[4], int(line_array[5]), dep_time, taxi_time,
-                                      arr_time, flight_time, line_array[12], int(line_array[13])))
-    if len(flights) == 0:
-        return None
-
-    return flights
+    return flights if flights else None
 
 
 def dime_cantidad_aerolinea_por_hora(listavuelo: list[Flight], airline: str, hora1: int, hora2:int) -> int:
