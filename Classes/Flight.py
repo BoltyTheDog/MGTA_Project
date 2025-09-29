@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class Flight:
-    def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str, registration: str, crz_fl: int, departure_time: datetime, taxi_time: datetime, arrival_time: datetime, flight_time: datetime, category: str, seats: int) -> None:
+    def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str, registration: str, crz_fl: int, departure_time: datetime, taxi_time: timedelta, arrival_time: datetime, flight_time: timedelta, category: str, seats: int) -> None:
         self.callsign = callsign
         self.airplane_model = airplane_model
         self.departure_airport = departure_airport

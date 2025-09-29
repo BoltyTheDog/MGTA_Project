@@ -1,7 +1,10 @@
-from collections import Counter
+import matplotlib.pyplot as plt
+from datetime import datetime,timedelta
+from Classes.Flight import Flight
 import numpy as np
+from collections import Counter
 
-def computeSlots(Hstart, Hend, HNoReg, PAAR, AAR):
+def compute_slots(hstart: int, hend: int, hnoreg: int, paar: int, aar: int) -> np.ndarray:
     """
     Computes the slot matrix for airport regulation.
     Each slot: [slot_time, flight_id, airline_id]
@@ -20,27 +23,24 @@ def computeSlots(Hstart, Hend, HNoReg, PAAR, AAR):
     slots: np.ndarray, shape (n_slots, 3)
     """
     slots = []
-    t = Hstart
+    t = hstart
 
     # Regulation period: use PAAR
-    slot_interval_reg = 60 / PAAR
-    while t < HNoReg:
+    slot_interval_reg = 60 / paar
+    while t < hnoreg:
         slots.append([int(round(t)), 0, 0])
         t += slot_interval_reg
 
     # Post-regulation period: use AAR
-    slot_interval_nom = 60 / AAR
-    while t < Hend:
+    slot_interval_nom = 60 / aar
+    while t < hend:
         slots.append([int(round(t)), 0, 0])
         t += slot_interval_nom
 
     return np.array(slots, dtype=int)
 
 
-import matplotlib.pyplot as plt
-from datetime import datetime,timedelta
-from Classes.Flight import Flight
-import numpy as np
+
 
 def initialise_flights(filename: str) -> list['Flight'] | None:
     flights = []
@@ -51,7 +51,6 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
             if line_array[3] == "LEBL":
                 dep_time = datetime.strptime(line_array[6], "%H:%M:%S")
                 arr_time = datetime.strptime(line_array[8], "%H:%M:%S")
-                
                 taxi_time = timedelta(minutes=int(line_array[7]))
                 flight_time = datetime.strptime(line_array[10], "%H:%M:%S") 
                 flight_duration = timedelta(
@@ -70,7 +69,7 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
 def dime_cantidad_aerolinea_por_hora(listavuelo: list[Flight], airline: str, hora1: int, hora2:int) -> int:
     counter = 0
     for vuelo in listavuelo:
-        if vuelo.callsign[:3] == airline and hora1 <= vuelo.arr_time.hour <= hora2:
+        if vuelo.callsign.startswith(airline) and hora1 <= vuelo.arr_time.hour <= hora2:
             counter = counter + 1
     return counter
 
@@ -108,7 +107,7 @@ def plot_aggregated_demand(flights: list[Flight], reghstart: int, reghend: int, 
     counter = Counter(minutes)
 
     # Create arrays for all 1440 minutes in a day (24 * 60)
-    minutes_range = np.arange(1440)  # 0 to 1439 minutes
+    minutes_range = np.arange(1440, dtype=int)  # 0 to 1439 minutes
     arrivals_per_minute = np.array([counter.get(m, 0) for m in minutes_range])
 
     # Calculate cumulative arrivals
