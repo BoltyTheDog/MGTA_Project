@@ -66,13 +66,25 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
     return flights if flights else None
 
 
-def dime_cantidad_aerolinea_por_hora(listavuelo: list[Flight], airline: str, hora1: int, hora2:int) -> int:
+def amount_flights_by_hour(flights: list[Flight], airline: str, hour1: int, hour2: int) -> int:
     counter = 0
-    for vuelo in listavuelo:
-        if vuelo.callsign.startswith(airline) and hora1 <= vuelo.arr_time.hour <= hora2:
+    for f in flights:
+        if f.callsign.startswith(airline) and hour1 <= f.arr_time.hour <= hour2:
             counter = counter + 1
     return counter
 
+def flight_by_callsign(flights: list[Flight], callsign: str) -> Flight | None:
+    for f in flights:
+        if f.callsign == callsign:
+            return f
+    else:
+        return None
+
+def flight_distance(f: Flight) -> float:
+    velocity = 500   #f.speed
+    time = f.flight_time
+    distance = velocity * time.total_seconds()
+    return distance
 
 
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:

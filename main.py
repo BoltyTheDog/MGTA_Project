@@ -1,4 +1,4 @@
-from Functions import initialise_flights, plot_flight_count, plot_aggregated_demand, dime_cantidad_aerolinea_por_hora, compute_slots
+from Functions import initialise_flights, plot_flight_count, plot_aggregated_demand, amount_flights_by_hour, compute_slots, flight_distance, flight_by_callsign
 
 max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
@@ -23,9 +23,14 @@ PAAR: int = reduced_capacity
 AAR: int = max_capacity
 slots = compute_slots(Hstart_min, Hend_min, HNoReg_min, PAAR, AAR)
 
-cantidadVLG = dime_cantidad_aerolinea_por_hora(arrival_flights, "VLG",10, 11)
-print(cantidadVLG)
+amountVLG = amount_flights_by_hour(arrival_flights, "VLG",10, 11)
+print(amountVLG)
 
 print("Computed slots matrix:")
 print(slots)
 
+testflight = flight_by_callsign(arrival_flights, "RYR404A")
+
+distance = flight_distance(testflight)
+print(distance)
+print(type(distance))
