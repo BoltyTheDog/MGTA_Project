@@ -44,7 +44,7 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
     with open(filename, 'r') as r:
         next(r)  # skip header
         for line in r:
-            line_array = line.strip().split(",")  # remove newlines
+            line_array = line.strip().split(";")
             if line_array[3] == "LEBL":
                 dep_time = datetime.strptime(line_array[6], "%H:%M:%S")
                 arr_time = datetime.strptime(line_array[8], "%H:%M:%S")
@@ -56,8 +56,9 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
 
                 flights.append(Flight(
                     line_array[0], line_array[1], line_array[2], line_array[3],
-                    line_array[4], int(line_array[5]), dep_time, taxi_time,
-                    arr_time, flight_duration, line_array[11], int(line_array[12])
+                    int(line_array[5]), dep_time, taxi_time,
+                    arr_time, flight_duration, line_array[11], int(line_array[12]),
+                    float(line_array[16]), float(line_array[17])
                 ))
 
     return flights if flights else None
@@ -67,37 +68,18 @@ def amount_flights_by_hour(flights: list[Flight], airline: str, hour1: int, hour
     counter = 0
     for f in flights:
         if f.callsign.startswith(airline) and hour1 <= f.arr_time.hour <= hour2:
-            counter = counter + 1
+            counter += 1
     return counter
 
 def flight_by_callsign(flights: list[Flight], callsign: str) -> Flight | None:
     for f in flights:
         if f.callsign == callsign:
             return f
-    else:
-        return None
-"""
-def flight_distance(f: Flight) -> float:
-    velocity = 500   #f.speed
-    time = f.flight_time
-    distance = velocity * time.total_seconds()
-    return distance
-"""
-""" def flight_velocity_kt(f: Flight) -> float:
-    fl = f.cruise
-    if fl == 80:
-        return 280
-    elif fl = 90:
-        return 
-"""
+    return None
 
 
-def excempt_flights(flights: list[Flight]) -> list[Flight]:
-    excemptflights = []
-    for flight in flights:
-        if flight.exempt:
-            excemptflights.append(flight)
-    return excemptflights
+
+
 
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:
 
