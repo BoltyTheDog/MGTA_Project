@@ -1,4 +1,4 @@
-from Functions import initialise_flights, plot_flight_count, plot_aggregated_demand, amount_flights_by_hour, compute_slots, flight_distance, flight_by_callsign
+from Functions import initialise_flights, plot_flight_count, plot_aggregated_demand, amount_flights_by_hour, compute_slots, flight_by_callsign
 
 max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
@@ -29,8 +29,5 @@ print(amountVLG)
 print("Computed slots matrix:")
 print(slots)
 
-testflight = flight_by_callsign(arrival_flights, "RYR404A")
 
-distance = flight_distance(testflight)
-print(distance)
-print(type(distance))
+
