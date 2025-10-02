@@ -5,7 +5,7 @@ from datetime import datetime
 HStart: int = 11  # Regulation start hour
 HEnd: int = 18    # Regulation end hour
 DISTANCE_THRESHOLD_KM: float = 3500.0  # Distance threshold in KM for exemption
-PUBLISHING_TIME: int = 10  # Publishing time in hours (10am)
+PUBLISHING_TIME: int = HStart  # Publishing time in hours (10am)
 
 def parse_time_to_hours(time_str):
     try:
@@ -14,7 +14,7 @@ def parse_time_to_hours(time_str):
     except:
         return None
 
-def is_exempt(row, distance_threshold, h_start, h_end):
+def is_exempt(row, distance_threshold, publishing_time,):
     # Condition 1: Check if Coming From is Non-ECAC
     if pd.notna(row['Coming From']) and str(row['Coming From']).strip().upper() == 'NON-ECAC':
         return "Yes"
@@ -27,29 +27,26 @@ def is_exempt(row, distance_threshold, h_start, h_end):
                 return "Yes"
         except (ValueError, TypeError):
             pass
-    
-    # Condition 3: Check if ETA (arrival time) is outside regulation hours
-    if pd.notna(row['ETA']):
-        eta_hours = parse_time_to_hours(str(row['ETA']))
-        if eta_hours is not None:
-            # ETA is outside regulation window (before HStart or after HEnd)
-            if eta_hours < h_start or eta_hours >= h_end:
-                return "Yes"
-    
-    return "No"
-
-def determine_delay_type(row, is_exempt, publishing_time):
-    if is_exempt == "Yes":
-        return "None"
-    
-    # For non-exempt flights, check ETD against publishing time
+        # Condition 3: Check ETD against publishing time
     if pd.notna(row['ETD']):
         etd_hours = parse_time_to_hours(str(row['ETD']))
-        if etd_hours is not None:
-            if etd_hours < publishing_time:
-                return "Air"
-            else:
+        if etd_hours and etd_hours < publishing_time:
+            return "Yes"
+
+    return "No"
+
+def determine_delay_type(row, is_exempt, h_start, h_end):
+        # Condition 3: Check if ETA (arrival time) is outside regulation hours
+    if pd.notna(row['ETA']):
+        eta_hours = parse_time_to_hours(str(row['ETA']))
+        if eta_hours:
+            # ETA is outside regulation window (before HStart or after HEnd)
+            if eta_hours < h_start or eta_hours >= h_end:
+                return "None"
+            if is_exempt == "No":
                 return "Ground"
+            return "Air"
+
     
     return ""  # If ETD is missing or invalid
 
@@ -66,10 +63,10 @@ def add_exemption_columns(input_csv_path, output_csv_path, distance_threshold=DI
             df = pd.read_csv(input_csv_path, delimiter=';', encoding='cp1252')
     
     # Add Exempt column
-    df['Exempt'] = df.apply(lambda row: is_exempt(row, distance_threshold, h_start, h_end), axis=1)
+    df['Exempt'] = df.apply(lambda row: is_exempt(row, distance_threshold, publishing_time), axis=1)
     
     # Add Delay Type column based on exemption status and publishing time
-    df['Delay Type'] = df.apply(lambda row: determine_delay_type(row, row['Exempt'], publishing_time), axis=1)
+    df['Delay Type'] = df.apply(lambda row: determine_delay_type(row, row['Exempt'], h_start, h_end), axis=1)
     
     # Save to new CSV
     df.to_csv(output_csv_path, sep=';', index=False)
