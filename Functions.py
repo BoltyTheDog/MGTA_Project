@@ -39,9 +39,6 @@ def compute_slots(hstart: int, hend: int, hnoreg: int, paar: int, aar: int) -> n
 
     return np.array(slots, dtype=int)
 
-
-
-
 def initialise_flights(filename: str) -> list['Flight'] | None:
     flights = []
     with open(filename, 'r') as r:
@@ -79,13 +76,28 @@ def flight_by_callsign(flights: list[Flight], callsign: str) -> Flight | None:
             return f
     else:
         return None
-
+"""
 def flight_distance(f: Flight) -> float:
     velocity = 500   #f.speed
     time = f.flight_time
     distance = velocity * time.total_seconds()
     return distance
+"""
+""" def flight_velocity_kt(f: Flight) -> float:
+    fl = f.cruise
+    if fl == 80:
+        return 280
+    elif fl = 90:
+        return 
+"""
 
+
+def excempt_flights(flights: list[Flight]) -> list[Flight]:
+    excemptflights = []
+    for flight in flights:
+        if flight.exempt:
+            excemptflights.append(flight)
+    return excemptflights
 
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:
 
