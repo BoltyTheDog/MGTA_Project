@@ -5,7 +5,7 @@ reduced_capacity: int = 20  # LEBL reduced capacity
 HStart: int = 11 # Regulation start hour
 HEnd: int = 18 # Regulation end hour
 
-arrival_flights = initialise_flights("Data/LEBL_10AUG2025_ECAC.csv")
+arrival_flights = initialise_flights("Data/LEBL_10AUG2025_ECAC_updated.csv")
 
 print(arrival_flights[0])
 if not arrival_flights:

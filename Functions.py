@@ -56,12 +56,20 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
 
                 flights.append(Flight(
                     line_array[0], line_array[1], line_array[2], line_array[3],
-                    int(line_array[5]), dep_time, taxi_time,
-                    arr_time, flight_duration, line_array[11], int(line_array[12]),
-                    float(line_array[16]), float(line_array[17])
+                    int(line_array[5]), float(line_array[16]), dep_time, taxi_time,
+                    arr_time, flight_duration, float(line_array[17]), line_array[11], int(line_array[12]),
+                    line_array[18], line_array[19]
                 ))
 
     return flights if flights else None
+
+
+
+
+#def exempt_flights(flights: list[Flight]) -> list[Flight]:
+
+
+
 
 
 def amount_flights_by_hour(flights: list[Flight], airline: str, hour1: int, hour2: int) -> int:
@@ -76,9 +84,6 @@ def flight_by_callsign(flights: list[Flight], callsign: str) -> Flight | None:
         if f.callsign == callsign:
             return f
     return None
-
-
-
 
 
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:

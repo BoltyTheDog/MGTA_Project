@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 
 class Flight:
-    def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str, crz_fl: int, departure_time: datetime, taxi_time: timedelta, arrival_time: datetime, flight_time: timedelta, category: str, seats: int, crz_spd: float, flight_dis: float) -> None:
+    def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str, crz_fl: int, crz_spd: float, departure_time: datetime, taxi_time: timedelta, arrival_time: datetime, flight_time: timedelta, flight_dis: float, category: str, seats: int, exempt: str, del_type: str) -> None:
         self.callsign = callsign
         self.airplane_model = airplane_model
         self.departure_airport = departure_airport
@@ -16,6 +16,8 @@ class Flight:
         self.flight_distance = flight_dis
         self.cat = category
         self.seats = seats
+        self.exempt = exempt
+        self.delay_type = del_type
 
     def __str__(self):
         return (f"Flight info:\n"
@@ -31,7 +33,11 @@ class Flight:
                 f"Flight time: {self.flight_time}\n"
                 f"Flight distance: {self.flight_distance} km\n"
                 f"Category: {self.cat}\n"
-                f"Seats No: {self.seats}\n")
+                f"Seats No: {self.seats}\n"
+                f"Exempt: {self.exempt}\n"
+                f"Delay type: {self.delay_type}\n")
+
+
 
 if __name__ == "__main__":
     print("You're not executing the main program")
