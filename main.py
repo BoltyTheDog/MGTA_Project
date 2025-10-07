@@ -19,43 +19,45 @@ HNoReg: float = f.plot_aggregated_demand(arrival_flights, HStart, HEnd, max_capa
 
 filtered_flights = f.filter_arrival_flights(arrival_flights, distThreshold, HStart, HNoReg, HFile)
 
-Hstart_min: int = 648  # 10:48 in minutes
-Hend_min: int = 780   # 13:00 in minutes
-PAAR: int = reduced_capacity
-AAR: int = max_capacity
-slots = f.compute_slots(Hstart_min, Hend_min, HNoReg * 60, PAAR, AAR)
+Hstart_min: int = HStart*60  # 11:00 in minutes
+Hend_min: int = HEnd * 60   # 18:00 in minutes
 
-amountVLG = f.amount_flights_by_hour(arrival_flights, "VLG",10, 11)
-print(amountVLG)
+HNoReg_min = HNoReg * 60  # Convert to minutes
+extended_HNoReg = HNoReg_min + 30
+slots = f.compute_slots(Hstart_min, Hend_min, extended_HNoReg, reduced_capacity, max_capacity)
 
-print("Computed slots matrix:")
-print(slots)
+# amountVLG = f.amount_flights_by_hour(arrival_flights, "VLG",10, 11)
+# print(amountVLG)
 
-# Print arrival flights nicely
-print("=" * 80)
-print("ARRIVAL FLIGHTS VECTOR")
-print("=" * 80)
-print(f"Total flights: {len(arrival_flights)}")
+slotted_arrivals = f.assignSlotsGDP(filtered_flights, slots)
+
+f.plot_slotted_arrivals(slotted_arrivals, max_capacity, HStart, HEnd)
+
+f.print_delay_statistics(slotted_arrivals)
+
+# Print basic slot assignments for all arrivals
+print("\n" + "="*80)
+print("BASIC SLOT ASSIGNMENTS - ALL ARRIVALS")
+print("="*80)
+print(f"{'#':<4} {'Callsign':<8} {'Original ETA':<12} {'Assigned Slot':<13} {'Delay (min)':<11} {'Type':<6} {'Exempt':<6}")
 print("-" * 80)
 
-for i, flight in enumerate(arrival_flights, 1):
-    print(f"Flight {i}:")
-    print(f"  Callsign: {flight.callsign}")
-    print(f"  Aircraft: {flight.airplane_model}")
-    print(f"  From: {flight.departure_airport} → To: {flight.arrival_airport}")
-    print(f"  Arrival Time: {flight.arr_time.strftime('%H:%M:%S')}")
-    print(f"  Departure Time: {flight.dep_time.strftime('%H:%M:%S')}")
-    print(f"  Flight Distance: {flight.flight_distance} km")
-    print(f"  Category: {flight.cat}")
-    print(f"  Seats: {flight.seats}")
-    print(f"  ECAC?: {flight.is_ecac}")
-    if hasattr(flight, 'is_exempt'):
-        print(f"  Exempt: {flight.is_exempt}")
-    if hasattr(flight, 'delay_type'):
-        print(f"  Delay Type: {flight.delay_type}")
-    print("-" * 40)
+# Sort flights by original ETA for display
+sorted_flights = sorted(slotted_arrivals, key=lambda f: f.arr_time)
 
-print("=" * 80)
+for i, flight in enumerate(sorted_flights, 1):
+    original_eta = flight.arr_time.strftime('%H:%M:%S')
+    
+    if hasattr(flight, 'assigned_slot_time') and flight.assigned_slot_time is not None:
+        assigned_slot = f"{flight.assigned_slot_time//60:02d}:{flight.assigned_slot_time%60:02d}:00"
+        delay = getattr(flight, 'assigned_delay', 0)
+    else:
+        assigned_slot = original_eta
+        delay = 0
+    
+    delay_type = getattr(flight, 'delay_type', 'None')
+    is_exempt = getattr(flight, 'is_exempt', False)
+    
+    print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
-
-
+print("="*80)

@@ -7,34 +7,36 @@ from collections import Counter
 def compute_slots(hstart: int, hend: int, hnoreg: float, paar: int, aar: int) -> np.ndarray:
     """
     Computes the slot matrix for airport regulation.
-    Each slot: [slot_time, flight_id, airline_id]
+    Each slot: [slot_time, flight_id, airline_id, air_delay, ground_delay]
     - slot_time: initial time of the slot (in minutes)
     - flight_id: initially 0
     - airline_id: initially 0
+    - air_delay: initially 0 (in minutes)
+    - ground_delay: initially 0 (in minutes)
 
     Parameters:
-    Hstart: int, start time in minutes
-    Hend: int, end time in minutes
-    HNoReg: int, end of regulation in minutes
+    Hstart: int, start time in minutes (regulation start)
+    Hend: int, end time in minutes (regulation end, e.g., 18:00 = 1080)
+    HNoReg: float, end of all regulation in minutes (when capacity returns to normal completely)
     PAAR: int, reduced capacity (slots per hour) during regulation
     AAR: int, nominal capacity (slots per hour) after regulation
 
     Returns:
-    slots: np.ndarray, shape (n_slots, 3)
+    slots: np.ndarray, shape (n_slots, 5)
     """
     slots = []
     t = hstart
 
-    # Regulation period: use PAAR
+    # Regulation period: use PAAR (reduced capacity)
     slot_interval_reg = 60 / paar
     while t < hend:
-        slots.append([int(round(t)), 0, 0])
+        slots.append([int(round(t)), 0, 0, 0, 0])
         t += slot_interval_reg
 
-    # Post-regulation period: use AAR
+    # Post-regulation period: use AAR (nominal capacity) - this is key for absorbing delayed flights
     slot_interval_nom = 60 / aar
     while t < hnoreg:
-        slots.append([int(round(t)), 0, 0])
+        slots.append([int(round(t)), 0, 0, 0, 0])
         t += slot_interval_nom
 
     return np.array(slots, dtype=int)
@@ -103,6 +105,71 @@ def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, 
     plt.hlines(y=max_capacity, xmin=reghend, xmax=24, colors="green", linewidth=2)
 
     plt.show()
+    return None
+
+
+def plot_slotted_arrivals(slotted_flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:
+    """
+    Plot histogram of arrivals per hour after slot assignment (GDP implementation).
+    Shows the redistributed arrival times compared to capacity constraints.
+    
+    Parameters:
+    slotted_flights: list[Flight] - Flights with assigned slots
+    max_capacity: int - Maximum airport capacity per hour
+    reghstart: int - Regulation start hour
+    reghend: int - Regulation end hour
+    """
+    
+    if reghstart < 0:
+        reghstart = 0
+    if reghend > 24:
+        reghend = 24
+    
+    # Extract arrival hours from assigned slot times
+    slotted_hours = []
+    for flight in slotted_flights:
+        if hasattr(flight, 'assigned_slot_time') and flight.assigned_slot_time is not None:
+            # Convert minutes to hours
+            slot_hour = flight.assigned_slot_time // 60
+            slotted_hours.append(slot_hour)
+        else:
+            # Use original arrival time if no slot assigned
+            slotted_hours.append(flight.arr_time.hour)
+    
+    counter = Counter(slotted_hours)
+    print("\nContador de vuelos por hora (DESPUÉS del slotting):")
+    for h, c in sorted(counter.items()):
+        print(f"{h}:00 -> {c} vuelos")
+    
+    # Create the histogram
+    plt.figure(figsize=(12, 6))
+    plt.hist(slotted_hours, bins=24, range=(0,24), color="darkblue", edgecolor="black", alpha=0.7)
+    
+    plt.xlabel("Hour")
+    plt.ylabel("Number of arrivals")
+    plt.title("Arrivals per hour AFTER slot assignment (GDP)")
+    
+    # Add capacity lines
+    plt.hlines(y=max_capacity, xmin=0, xmax=reghstart, colors="green", linewidth=2, label=f"Normal capacity ({max_capacity})")
+    plt.hlines(y=(max_capacity / 2), xmin=reghstart, xmax=reghend, colors="red", linewidth=2, label=f"Reduced capacity ({max_capacity // 2})")
+    plt.hlines(y=max_capacity, xmin=reghend, xmax=24, colors="green", linewidth=2)
+    
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+    
+    # Calculate and print statistics
+    total_flights = len(slotted_flights)
+    flights_in_regulation = sum(1 for h in slotted_hours if reghstart <= h < reghend)
+    flights_before_regulation = sum(1 for h in slotted_hours if h < reghstart)
+    flights_after_regulation = sum(1 for h in slotted_hours if h >= reghend)
+    
+    print(f"\nStatistics after slot assignment:")
+    print(f"  Total flights: {total_flights}")
+    print(f"  Flights before regulation ({reghstart}:00): {flights_before_regulation}")
+    print(f"  Flights during regulation ({reghstart}:00-{reghend}:00): {flights_in_regulation}")
+    print(f"  Flights after regulation (≥{reghend}:00): {flights_after_regulation}")
+    
     return None
 
 
@@ -312,6 +379,234 @@ def filter_arrival_flights(arrival_flights: list[Flight],
     print(f"Delay types - None: {delay_types['None']}, Ground: {delay_types['Ground']}, Air: {delay_types['Air']}")
 
     return arrival_flights  # Return the same updated vector
+
+
+def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[Flight]:
+    """
+    Assigns slots to flights according to Ground Delay Program (GDP) rules:
+    1. Only assigns slots to flights that need regulation (delay_type = "Air" or "Ground")
+    2. Exempt flights with "Air" delay are assigned first (with air delay)
+    3. Controlled flights with "Ground" delay are assigned second (with ground delay)
+    4. No flight can be assigned a slot before its original ETA
+    5. Flights with delay_type = "None" are not assigned slots (they arrive as scheduled)
+    
+    Parameters:
+    filtered_arrivals: list[Flight] - List of flights to assign slots to
+    slots: np.ndarray - Slots matrix [slot_time, flight_id, airline_id, air_delay, ground_delay]
+    
+    Returns:
+    list[Flight] - Updated list of flights with assigned slots and delays
+    """
+    
+    def time_to_minutes(time_obj: datetime) -> int:
+        """Convert datetime object to minutes since midnight"""
+        return time_obj.hour * 60 + time_obj.minute
+    
+    def minutes_to_time_str(minutes: int) -> str:
+        """Convert minutes since midnight to HH:MM format"""
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours:02d}:{mins:02d}"
+    
+    # Create a copy of the slots matrix to work with
+    available_slots = slots.copy()
+    
+    # Create copies of flights to avoid modifying the original list
+    slotted_arrivals = [flight for flight in filtered_arrivals]
+    
+    # Filter flights that actually need slot assignment (only those with Air or Ground delay types)
+    flights_needing_slots = [f for f in slotted_arrivals if f.delay_type in ["Air", "Ground"]]
+    flights_not_needing_slots = [f for f in slotted_arrivals if f.delay_type == "None"]
+    
+    print(f"Total flights: {len(slotted_arrivals)}")
+    print(f"Flights needing slot assignment: {len(flights_needing_slots)} (Air: {sum(1 for f in flights_needing_slots if f.delay_type == 'Air')}, Ground: {sum(1 for f in flights_needing_slots if f.delay_type == 'Ground')})")
+    print(f"Flights not needing slots (arriving as scheduled): {len(flights_not_needing_slots)}")
+    
+    # Add new attributes to track slot assignment for all flights
+    for flight in slotted_arrivals:
+        flight.assigned_slot_time = None  # Will store assigned slot time in minutes
+        flight.assigned_delay = 0  # Will store total delay in minutes
+        flight.original_eta_minutes = time_to_minutes(flight.arr_time)
+        
+        # Flights with delay_type "None" keep their original schedule
+        if flight.delay_type == "None":
+            flight.assigned_slot_time = flight.original_eta_minutes
+            flight.assigned_delay = 0
+    
+    # Sort only the flights that need slots by original ETA for sequential assignment
+    flights_needing_slots.sort(key=lambda f: f.original_eta_minutes)
+    
+    # Phase 1: Assign exempt flights that need Air delay
+    exempt_flights_needing_slots = [f for f in flights_needing_slots if f.delay_type == "Air"]
+    controlled_flights_needing_slots = [f for f in flights_needing_slots if f.delay_type == "Ground"]
+    
+    print(f"Assigning slots for {len(exempt_flights_needing_slots)} exempt flights (Air delay) and {len(controlled_flights_needing_slots)} controlled flights (Ground delay)")
+    
+    def assign_flight_to_slot(flight: Flight, is_exempt: bool) -> bool:
+        """
+        Assign a flight to the first available slot that's not before its original ETA
+        Returns True if assignment successful, False otherwise
+        """
+        original_eta = flight.original_eta_minutes
+        
+        # Find the first available slot that's not before the original ETA
+        for i, slot in enumerate(available_slots):
+            slot_time = slot[0]  # slot time in minutes
+            flight_id = slot[1]  # 0 means available
+            
+            # Check if slot is available and not before original ETA
+            if flight_id == 0 and slot_time >= original_eta:
+                # Assign the flight to this slot
+                available_slots[i][1] = hash(flight.callsign) % 10000  # Use hash of callsign as flight ID
+                available_slots[i][2] = hash(flight.callsign[:3]) % 1000  # Use airline code hash as airline ID
+                
+                # Calculate delay
+                delay_minutes = slot_time - original_eta
+                flight.assigned_slot_time = slot_time
+                flight.assigned_delay = delay_minutes
+                
+                # Assign delay type based on exemption status
+                if is_exempt:
+                    available_slots[i][3] = delay_minutes  # Air delay
+                    available_slots[i][4] = 0  # No ground delay
+                else:
+                    available_slots[i][3] = 0  # No air delay
+                    available_slots[i][4] = delay_minutes  # Ground delay
+                
+                return True
+        
+        return False
+    
+    # Assign exempt flights first (those needing Air delay)
+    assigned_exempt = 0
+    for flight in exempt_flights_needing_slots:
+        if assign_flight_to_slot(flight, is_exempt=True):
+            assigned_exempt += 1
+        else:
+            print(f"Warning: Could not assign slot to exempt flight {flight.callsign}")
+    
+    # Assign controlled flights second (those needing Ground delay)
+    assigned_controlled = 0
+    for flight in controlled_flights_needing_slots:
+        if assign_flight_to_slot(flight, is_exempt=False):
+            assigned_controlled += 1
+        else:
+            print(f"Warning: Could not assign slot to controlled flight {flight.callsign}")
+    
+    # Update the original slots matrix
+    slots[:] = available_slots[:]
+    
+    # Print assignment summary
+    print(f"Slot assignment completed:")
+    print(f"  Exempt flights assigned: {assigned_exempt}/{len(exempt_flights_needing_slots)}")
+    print(f"  Controlled flights assigned: {assigned_controlled}/{len(controlled_flights_needing_slots)}")
+    print(f"  Total flights needing slots: {len(flights_needing_slots)}")
+    print(f"  Total flights assigned: {assigned_exempt + assigned_controlled}/{len(flights_needing_slots)}")
+    print(f"  Flights keeping original schedule: {len(flights_not_needing_slots)}")
+    
+    # Calculate delay statistics
+    total_air_delay = sum(flight.assigned_delay for flight in exempt_flights_needing_slots if hasattr(flight, 'assigned_delay'))
+    total_ground_delay = sum(flight.assigned_delay for flight in controlled_flights_needing_slots if hasattr(flight, 'assigned_delay'))
+    
+    print(f"  Total air delay: {total_air_delay} minutes")
+    print(f"  Total ground delay: {total_ground_delay} minutes")
+    print(f"  Average air delay: {total_air_delay/len(exempt_flights_needing_slots):.1f} minutes" if exempt_flights_needing_slots else "  No exempt flights needing slots")
+    print(f"  Average ground delay: {total_ground_delay/len(controlled_flights_needing_slots):.1f} minutes" if controlled_flights_needing_slots else "  No controlled flights needing slots")
+    
+    return slotted_arrivals
+
+
+def print_delay_statistics(slotted_flights: list[Flight]) -> None:
+    """
+    Print comprehensive delay statistics for different flight categories.
+    
+    Parameters:
+    slotted_flights: list[Flight] - Flights with assigned slots and delays
+    """
+    import numpy as np
+    
+    # Separate flights by delay type
+    air_delay_flights = [f for f in slotted_flights if f.delay_type == "Air" and hasattr(f, 'assigned_delay')]
+    ground_delay_flights = [f for f in slotted_flights if f.delay_type == "Ground" and hasattr(f, 'assigned_delay')]
+    no_delay_flights = [f for f in slotted_flights if f.delay_type == "None"]
+    
+    # Extract delay values (in minutes)
+    air_delays = [f.assigned_delay for f in air_delay_flights]
+    ground_delays = [f.assigned_delay for f in ground_delay_flights]
+    no_delays = [0 for f in no_delay_flights]  # No delay flights have 0 delay
+    
+    # All delays combined
+    all_delays = air_delays + ground_delays + no_delays
+    
+    def calculate_stats(delays, category_name):
+        """Calculate and return statistics for a delay category"""
+        if not delays:
+            return {
+                'count': 0,
+                'total': 0,
+                'mean': 0,
+                'median': 0,
+                'std': 0,
+                'min': 0,
+                'max': 0
+            }
+        
+        delays_array = np.array(delays)
+        return {
+            'count': len(delays),
+            'total': np.sum(delays_array),
+            'mean': np.mean(delays_array),
+            'median': np.median(delays_array),
+            'std': np.std(delays_array),
+            'min': np.min(delays_array),
+            'max': np.max(delays_array)
+        }
+    
+    # Calculate statistics for each category
+    air_stats = calculate_stats(air_delays, "Air Delay")
+    ground_stats = calculate_stats(ground_delays, "Ground Delay")
+    no_delay_stats = calculate_stats(no_delays, "No Delay")
+    all_stats = calculate_stats(all_delays, "All Flights")
+    
+    print("\n" + "="*80)
+    print("COMPREHENSIVE DELAY STATISTICS")
+    print("="*80)
+    
+    def print_category_stats(stats, category_name):
+        """Print statistics for a specific category"""
+        print(f"\n{category_name.upper()}:")
+        print(f"  Count: {stats['count']} flights")
+        print(f"  Total delay: {stats['total']:.0f} minutes ({stats['total']/60:.1f} hours)")
+        print(f"  Mean delay: {stats['mean']:.1f} minutes")
+        print(f"  Median delay: {stats['median']:.1f} minutes")
+        print(f"  Standard deviation: {stats['std']:.1f} minutes")
+        print(f"  Minimum delay: {stats['min']:.0f} minutes")
+        print(f"  Maximum delay: {stats['max']:.0f} minutes")
+    
+    # Print statistics for each category
+    print_category_stats(air_stats, "Air Delay Flights")
+    print_category_stats(ground_stats, "Ground Delay Flights")
+    print_category_stats(no_delay_stats, "No Delay Flights")
+    print_category_stats(all_stats, "All Flights Combined")
+    
+    # Additional summary
+    print(f"\n" + "-"*50)
+    print("SUMMARY:")
+    print(f"  Total flights processed: {len(slotted_flights)}")
+    print(f"  Flights with air delay: {air_stats['count']} ({air_stats['count']/len(slotted_flights)*100:.1f}%)")
+    print(f"  Flights with ground delay: {ground_stats['count']} ({ground_stats['count']/len(slotted_flights)*100:.1f}%)")
+    print(f"  Flights with no delay: {no_delay_stats['count']} ({no_delay_stats['count']/len(slotted_flights)*100:.1f}%)")
+    print(f"  Total system delay: {all_stats['total']:.0f} minutes ({all_stats['total']/60:.1f} hours)")
+    print(f"  Average delay per flight: {all_stats['mean']:.1f} minutes")
+    
+    # Delay efficiency metrics
+    regulation_flights = air_stats['count'] + ground_stats['count']
+    if regulation_flights > 0:
+        avg_regulation_delay = (air_stats['total'] + ground_stats['total']) / regulation_flights
+        print(f"  Average delay for regulated flights: {avg_regulation_delay:.1f} minutes")
+    
+    print("="*80)
+
 
 if __name__ == "__main__":
     print("You're not executing the main program")
