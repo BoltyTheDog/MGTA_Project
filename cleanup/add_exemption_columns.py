@@ -30,7 +30,7 @@ def is_exempt(row, distance_threshold, publishing_time,):
         # Condition 3: Check ETD against publishing time
     if pd.notna(row['ETD']):
         etd_hours = parse_time_to_hours(str(row['ETD']))
-        if etd_hours and etd_hours < publishing_time:
+        if etd_hours and etd_hours < publishing_time + 0.5:
             return "Yes"
 
     return "No"

@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
 
-
 class Flight:
-    def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str, crz_fl: int, crz_spd: float, departure_time: datetime, taxi_time: timedelta, arrival_time: datetime, flight_time: timedelta, flight_dis: float, category: str, seats: int, exempt: str, del_type: str) -> None:
+    def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str,
+                 crz_fl: int, crz_spd: float, departure_time: datetime, taxi_time: timedelta,
+                 arrival_time: datetime, flight_time: timedelta, flight_dis: float, category: str,
+                 seats: int, is_ecac: bool = True, is_exempt: bool = False, delay_type: str = "") -> None:
         self.callsign = callsign
         self.airplane_model = airplane_model
         self.departure_airport = departure_airport
@@ -16,8 +18,9 @@ class Flight:
         self.flight_distance = flight_dis
         self.cat = category
         self.seats = seats
-        self.exempt = exempt
-        self.delay_type = del_type
+        self.is_ecac = is_ecac  # New: ECAC status
+        self.is_exempt = is_exempt  # Exemption status
+        self.delay_type = delay_type  # Delay type
 
     def __str__(self):
         return (f"Flight info:\n"
@@ -34,12 +37,9 @@ class Flight:
                 f"Flight distance: {self.flight_distance} km\n"
                 f"Category: {self.cat}\n"
                 f"Seats No: {self.seats}\n"
-                f"Exempt: {self.exempt}\n"
-                f"Delay type: {self.delay_type}\n")
-
-
+                f"Is ECAC: {self.is_ecac}\n"
+                f"Is Exempt: {self.is_exempt}\n"
+                f"Delay Type: {self.delay_type}\n")
 
 if __name__ == "__main__":
     print("You're not executing the main program")
-
-
