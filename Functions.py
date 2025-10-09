@@ -401,18 +401,13 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     def time_to_minutes(time_obj: datetime) -> int:
         """Convert datetime object to minutes since midnight"""
         return time_obj.hour * 60 + time_obj.minute
-    
-    def minutes_to_time_str(minutes: int) -> str:
-        """Convert minutes since midnight to HH:MM format"""
-        hours = minutes // 60
-        mins = minutes % 60
-        return f"{hours:02d}:{mins:02d}"
+
     
     # Create a copy of the slots matrix to work with
     available_slots = slots.copy()
     
     # Create copies of flights to avoid modifying the original list
-    slotted_arrivals = [flight for flight in filtered_arrivals]
+    slotted_arrivals = list(filtered_arrivals)
     
     # Filter flights that actually need slot assignment (only those with Air or Ground delay types)
     flights_needing_slots = [f for f in slotted_arrivals if f.delay_type in ["Air", "Ground"]]
@@ -497,7 +492,7 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     slots[:] = available_slots[:]
     
     # Print assignment summary
-    print(f"Slot assignment completed:")
+    print("Slot assignment completed:")
     print(f"  Exempt flights assigned: {assigned_exempt}/{len(exempt_flights_needing_slots)}")
     print(f"  Controlled flights assigned: {assigned_controlled}/{len(controlled_flights_needing_slots)}")
     print(f"  Total flights needing slots: {len(flights_needing_slots)}")
@@ -523,8 +518,7 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
     Parameters:
     slotted_flights: list[Flight] - Flights with assigned slots and delays
     """
-    import numpy as np
-    
+
     # Separate flights by delay type
     air_delay_flights = [f for f in slotted_flights if f.delay_type == "Air" and hasattr(f, 'assigned_delay')]
     ground_delay_flights = [f for f in slotted_flights if f.delay_type == "Ground" and hasattr(f, 'assigned_delay')]
@@ -533,12 +527,12 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
     # Extract delay values (in minutes)
     air_delays = [f.assigned_delay for f in air_delay_flights]
     ground_delays = [f.assigned_delay for f in ground_delay_flights]
-    no_delays = [0 for f in no_delay_flights]  # No delay flights have 0 delay
+    no_delays = [0 for _ in no_delay_flights]  # No delay flights have 0 delay
     
     # All delays combined
     all_delays = air_delays + ground_delays + no_delays
     
-    def calculate_stats(delays, category_name):
+    def calculate_stats(delays):
         """Calculate and return statistics for a delay category"""
         if not delays:
             return {
@@ -563,10 +557,10 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
         }
     
     # Calculate statistics for each category
-    air_stats = calculate_stats(air_delays, "Air Delay")
-    ground_stats = calculate_stats(ground_delays, "Ground Delay")
-    no_delay_stats = calculate_stats(no_delays, "No Delay")
-    all_stats = calculate_stats(all_delays, "All Flights")
+    air_stats = calculate_stats(air_delays)
+    ground_stats = calculate_stats(ground_delays)
+    no_delay_stats = calculate_stats(no_delays)
+    all_stats = calculate_stats(all_delays)
     
     print("\n" + "="*80)
     print("COMPREHENSIVE DELAY STATISTICS")
