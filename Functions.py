@@ -608,5 +608,7 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
     print("="*80)
 
 
+
+
 if __name__ == "__main__":
     print("You're not executing the main program")

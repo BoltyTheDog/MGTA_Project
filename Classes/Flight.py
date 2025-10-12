@@ -41,5 +41,21 @@ class Flight:
                 f"Is Exempt: {self.is_exempt}\n"
                 f"Delay Type: {self.delay_type}\n")
 
+    def computeunrecdel(self, delay: int, hstart: int) -> float:
+
+        unrecoverabledelay: float = 0
+        hstarttime = datetime.strptime(str(hstart), "%H")
+
+        ctd = self.dep_time + timedelta(minutes=int(delay))
+        if self.dep_time > hstarttime:
+            unrecoverabledelay = 0
+        elif ctd < hstarttime:
+            unrecoverabledelay = delay
+        elif self.dep_time < hstarttime < ctd:
+            delaydiff = hstarttime - self.dep_time
+            unrecoverabledelay = delaydiff.seconds / 60
+
+        return unrecoverabledelay
+
 if __name__ == "__main__":
     print("You're not executing the main program")

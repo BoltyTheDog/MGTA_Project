@@ -44,20 +44,31 @@ print("-" * 80)
 
 # Sort flights by original ETA for display
 sorted_flights = sorted(slotted_arrivals, key=lambda f: f.arr_time)
+unrecoverabledelay: float = 0
+otpcounter: int = 0
+
 
 for i, flight in enumerate(sorted_flights, 1):
     original_eta = flight.arr_time.strftime('%H:%M:%S')
-    
+    delay = 0
     if hasattr(flight, 'assigned_slot_time') and flight.assigned_slot_time is not None:
         assigned_slot = f"{flight.assigned_slot_time//60:02d}:{flight.assigned_slot_time%60:02d}:00"
         delay = getattr(flight, 'assigned_delay', 0)
     else:
         assigned_slot = original_eta
-        delay = 0
-    
+
     delay_type = getattr(flight, 'delay_type', 'None')
     is_exempt = getattr(flight, 'is_exempt', False)
+
+    unrecoverabledelay += flight.computeunrecdel(delay, HStart)
+
+    if delay > 15:
+        otpcounter += 1
     
     print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
 print("="*80)
+print(f"Unrecoverable delay = {unrecoverabledelay} mins")
+print("="*80)
+print(f"# of flights with 15+ minutes of delay: {otpcounter}")
+
