@@ -26,6 +26,7 @@ def compute_fuel_ask(distance_km: float, available_seats: int, force: bool = Fal
     """
     def validate_inputs():
         if not (50 <= available_seats <= 365) and not force:
+            print(f"Seats: {available_seats}")
             raise ValueError("Seats available out of range (50 - 365)")
         if not (100 <= distance_km <= 12000) and not force:
             raise ValueError("Distance out of range (100 - 12,000 km)")
@@ -173,6 +174,7 @@ def compute_co_ask(distance_km: float, available_seats: int, force: bool = False
     """
     def validate_inputs():
         if not (172 <= available_seats <= 365) and not force:
+            print(f"Available seats: {available_seats}")
             raise ValueError("Seats available out of range (172 - 365)")
         if not (200 <= distance_km <= 12000) and not force:
             raise ValueError("Distance out of range (200 - 12,000 km)")

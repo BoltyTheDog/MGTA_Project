@@ -1,4 +1,5 @@
 import Functions as f
+import emissions_fuel_model as e
 max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
 HStart: int = 11 # Regulation start hour
@@ -43,10 +44,11 @@ print(f"{'#':<4} {'Callsign':<8} {'Original ETA':<12} {'Assigned Slot':<13} {'De
 print("-" * 80)
 
 # Sort flights by original ETA for display
-sorted_flights = sorted(slotted_arrivals, key=lambda f: f.arr_time)
+sorted_flights = sorted(slotted_arrivals, key=lambda f: f.assigned_slot_time) #f.arr_time
 unrecoverabledelay: float = 0
 otpcounter: int = 0
 
+air_del_emission_count = 0
 
 for i, flight in enumerate(sorted_flights, 1):
     original_eta = flight.arr_time.strftime('%H:%M:%S')
@@ -67,8 +69,17 @@ for i, flight in enumerate(sorted_flights, 1):
     
     print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
+    if flight.delay_type == "Air":
+        air_del_emission_count += flight.compute_air_del_emissions(delay)
+
+
+
 print("="*80)
 print(f"Unrecoverable delay = {unrecoverabledelay} mins")
 print("="*80)
 print(f"# of flights with 15+ minutes of delay: {otpcounter}")
+print("="*80)
+print("Total of emissions from air delay: ", air_del_emission_count)
+
+
 

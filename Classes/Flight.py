@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import emissions_fuel_model as e
 
 class Flight:
     def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str,
@@ -56,6 +57,29 @@ class Flight:
             unrecoverabledelay = delaydiff.seconds / 60
 
         return unrecoverabledelay
+
+
+    def compute_air_del_emissions(self, delay: int) -> float:
+
+        seats = self.seats
+        distance = self.flight_distance
+        velocity = self.cruise_spd
+
+        if seats < 50:
+            seats = 50
+        elif seats > 365:
+            seats = 365
+        if distance < 100:
+            distance = 100
+        elif distance > 12000:
+            distance = 12000
+
+        co2_ask = e.compute_co2_ask(distance, seats)
+
+        total_co2 = co2_ask * seats * velocity * (1/1000) * 60 *(1/1000) * delay
+        return total_co2
+
+
 
 if __name__ == "__main__":
     print("You're not executing the main program")

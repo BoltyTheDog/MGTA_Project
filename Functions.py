@@ -321,7 +321,7 @@ def filter_arrival_flights(arrival_flights: list[Flight],
 
         # Condition 3: Check ETD against publishing time
         etd_hours = parse_time_to_hours(flight.dep_time)
-        if etd_hours < publishing_time + 0.5:  # 30 minutes buffer
+        if etd_hours < publishing_time + (1/3):  # 30 minutes buffer
             return True
 
         return False
