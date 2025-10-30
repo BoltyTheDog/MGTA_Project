@@ -98,15 +98,23 @@ for x in rf:
     print(x)
 print(len(rf))
 
-# Validación (unitary cost => rf = 1) -> total cost = total delay (check)
-slotted_arrivals = f.compute_GHP(filtered_flights, slots, rf_vector=None, objective='delay')
+# (unitary cost => rf = 1) -> total cost = total delay
+slotted_arrivals1 = f.compute_GHP(filtered_flights, slots, rf_vector=None, objective='delay')
 
-# Si quieres minimizar emisiones
-# slotted_arrivals = f.solve_GHP_lp(filtered_flights, slots, rf_vector=None, objective='emissions')
+# minimizar emisiones
+slotted_arrivals_cost = f.compute_GHP(filtered_flights, slots, rf_vector=rf, objective='emissions')
 
-# Tras la solución, puedes llamar a tus funciones de impresión/estadísticas
-f.plot_slotted_arrivals(slotted_arrivals, max_capacity, HStart, HEnd)
-f.print_delay_statistics(slotted_arrivals)
+# llamar a la funcion de impresión de estadísticas
+f.plot_slotted_arrivals(slotted_arrivals1, max_capacity, HStart, HEnd)
+f.print_delay_statistics(slotted_arrivals1)
+
+print("*"*80)
+print("*"*80)
+
+f.plot_slotted_arrivals(slotted_arrivals_cost, max_capacity, HStart, HEnd)
+f.print_delay_statistics(slotted_arrivals_cost)
+
+
 
 
 
