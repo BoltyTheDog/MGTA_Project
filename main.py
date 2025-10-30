@@ -49,6 +49,9 @@ unrecoverabledelay: float = 0
 otpcounter: int = 0
 
 air_del_emission_count = 0
+ground_del_emission_count = 0
+
+rf = []
 
 for i, flight in enumerate(sorted_flights, 1):
     original_eta = flight.arr_time.strftime('%H:%M:%S')
@@ -64,14 +67,23 @@ for i, flight in enumerate(sorted_flights, 1):
 
     unrecoverabledelay += flight.computeunrecdel(delay, HStart)
 
-    if delay > 15:
+    if delay < 15:
         otpcounter += 1
     
     print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
     if flight.delay_type == "Air":
-        air_del_emission_count += flight.compute_air_del_emissions(delay)
-
+        air_emission = flight.compute_air_del_emissions()
+        air_del_emission_count += air_emission
+        rf.append(air_emission)
+    if flight.delay_type == "Ground":
+        ground_emission = flight.compute_ground_del_emissions()
+        if delay > 60:
+            ground_emission = ground_emission / 9
+            ground_del_emission_count += flight.compute_ground_del_emissions()
+        else:
+            ground_del_emission_count += flight.compute_ground_del_emissions()
+        rf.append(ground_emission)
 
 
 print("="*80)
@@ -79,7 +91,23 @@ print(f"Unrecoverable delay = {unrecoverabledelay} mins")
 print("="*80)
 print(f"# of flights with 15+ minutes of delay: {otpcounter}")
 print("="*80)
-print("Total of emissions from air delay: ", air_del_emission_count)
+print("Total of emissions/min from air delay: ", air_del_emission_count)
+print("Total of emissions/min from ground delay: ", ground_del_emission_count)
+print("Vector rf: ")
+for x in rf:
+    print(x)
+print(len(rf))
+
+# Validación (unitary cost => rf = 1) -> total cost = total delay (check)
+slotted_arrivals = f.compute_GHP(filtered_flights, slots, rf_vector=None, objective='delay')
+
+# Si quieres minimizar emisiones
+# slotted_arrivals = f.solve_GHP_lp(filtered_flights, slots, rf_vector=None, objective='emissions')
+
+# Tras la solución, puedes llamar a tus funciones de impresión/estadísticas
+f.plot_slotted_arrivals(slotted_arrivals, max_capacity, HStart, HEnd)
+f.print_delay_statistics(slotted_arrivals)
+
 
 
 

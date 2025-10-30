@@ -59,7 +59,7 @@ class Flight:
         return unrecoverabledelay
 
 
-    def compute_air_del_emissions(self, delay: int) -> float:
+    def compute_air_del_emissions(self) -> float: #return kg CO2/min in air delay flights (exempt flights)
 
         seats = self.seats
         distance = self.flight_distance
@@ -76,9 +76,27 @@ class Flight:
 
         co2_ask = e.compute_co2_ask(distance, seats)
 
-        total_co2 = co2_ask * seats * velocity * (1/1000) * 60 *(1/1000) * delay
+        total_co2 = co2_ask * seats * velocity * (1/1000) * 60 *(1/1000)
         return total_co2
 
+    def compute_ground_del_emissions(self) -> float: #return kg CO2/min in air delay flights (exempt flights)
+        fuel_consum = 0
+        match self.cat:
+            case "A":
+                pass
+            case "B":
+                fuel_consum = (50/60)
+            case "C":
+                fuel_consum = (75/60)
+            case "D":
+                fuel_consum = (110/60)
+            case "E":
+                fuel_consum = (170/60)
+            case "F":
+                fuel_consum = (260/60)
+            case _:
+                raise ValueError("Invalid Category")
+        return fuel_consum * 3.16
 
 
 if __name__ == "__main__":
