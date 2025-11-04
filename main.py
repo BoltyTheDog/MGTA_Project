@@ -93,22 +93,21 @@ print(f"# of flights with 15+ minutes of delay: {otpcounter}")
 print("="*80)
 print("Total of emissions/min from air delay: ", air_del_emission_count)
 print("Total of emissions/min from ground delay: ", ground_del_emission_count)
-print("Vector rf: ")
-for x in rf:
-    print(x)
-print(len(rf))
+
 
 # (unitary cost => rf = 1) -> total cost = total delay
-slotted_arrivals1 = f.compute_GHP(filtered_flights, slots, rf_vector=None, objective='delay')
+slotted_arrivals1, totalcost1 = f.compute_GHP(filtered_flights, slots, rf_vector=None, objective='delay')
 
 # minimizar emisiones
-slotted_arrivals_cost = f.compute_GHP(filtered_flights, slots, rf_vector=rf, objective='emissions')
+slotted_arrivals_cost, totalcost2 = f.compute_GHP(filtered_flights, slots, rf_vector=rf, objective='emissions')
 
 # llamar a la funcion de impresión de estadísticas
 f.plot_slotted_arrivals(slotted_arrivals1, max_capacity, HStart, HEnd)
 f.print_delay_statistics(slotted_arrivals1)
 
 print("*"*80)
+print(totalcost1)
+print(totalcost2)
 print("*"*80)
 
 f.plot_slotted_arrivals(slotted_arrivals_cost, max_capacity, HStart, HEnd)

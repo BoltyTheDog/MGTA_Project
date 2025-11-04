@@ -605,7 +605,7 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
 
 
 
-
+#TODO use penalty functions to avoid 10h delay
 def compute_GHP(filtered_arrivals: list['Flight'], slots: np.ndarray, rf_vector: list | None = None, objective: str = 'delay'):
     """
     Solve GHP as an integer program:
@@ -695,6 +695,11 @@ def compute_GHP(filtered_arrivals: list['Flight'], slots: np.ndarray, rf_vector:
         print("Warning: solver did not find optimal solution. Status:", status)
         # still try to extract assignments if any
 
+    total_cost = pulp.value(prob.objective)
+    if total_cost is None:
+        total_cost = 0.0
+        print("Warning: Could not retrieve objective value, total cost set to 0")
+
     # Reset assigned fields for all flights
     for f in filtered_arrivals:
         f.assigned_slot_time = None
@@ -727,7 +732,7 @@ def compute_GHP(filtered_arrivals: list['Flight'], slots: np.ndarray, rf_vector:
     print(f"Assigned {assigned_count}/{n_f} regulated flights to slots (objective: {objective})")
 
     # compute total statistics similar to print_delay_statistics
-    return filtered_arrivals
+    return filtered_arrivals, total_cost
 
 
 
