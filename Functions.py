@@ -3,7 +3,6 @@ from datetime import datetime,timedelta
 from Classes.Flight import Flight
 import numpy as np
 from collections import Counter
-import math
 import pulp
 
 def compute_slots(hstart: int, hend: int, hnoreg: float, paar: int, aar: int) -> np.ndarray:
@@ -173,6 +172,63 @@ def plot_slotted_arrivals(slotted_flights: list[Flight], max_capacity: int, regh
     print(f"  Flights after regulation (≥{reghend}:00): {flights_after_regulation}")
     
     return None
+
+
+def compute_hnoreg(flights: list[Flight], reghstart: int, reghend: int, max_capacity: int,
+                   min_capacity: int) -> float:
+    """
+    Compute HNoReg (intercept hour) without plotting.
+    
+    Parameters:
+    flights: list[Flight] - List of flights to analyze
+    reghstart: int - Regulation start hour
+    reghend: int - Regulation end hour
+    max_capacity: int - Maximum airport capacity per hour
+    min_capacity: int - Reduced capacity during regulation
+    
+    Returns:
+    float: HNoReg (intercept hour when nominal capacity line meets aggregated demand)
+    """
+    # Convert arrival times to minutes since midnight
+    minutes = [f.arr_time.hour * 60 + f.arr_time.minute for f in flights]
+    counter = Counter(minutes)
+
+    # Create arrays for all 1440 minutes in a day (24 * 60)
+    minutes_range = np.arange(1440, dtype=int)  # 0 to 1439 minutes
+    arrivals_per_minute = np.array([counter.get(m, 0) for m in minutes_range])
+
+    # Calculate cumulative arrivals
+    cumulative_arrivals = np.cumsum(arrivals_per_minute)
+
+    # Regulation lines
+    reg_start_min = int(reghstart * 60)
+    reg_end_min = int(reghend * 60)
+    y_start = cumulative_arrivals[reg_start_min]
+
+    # Reduced capacity line
+    reduced_line = np.full_like(cumulative_arrivals, np.nan, dtype=float)
+    for m in range(reg_start_min, reg_end_min + 1):
+        reduced_line[m] = y_start + min_capacity * ((m - reg_start_min) / 60)
+    y_reduced_end = reduced_line[reg_end_min]
+
+    # Nominal capacity line and find intercept
+    nominal_line = np.full_like(cumulative_arrivals, np.nan, dtype=float)
+    intercepts = []
+    for m in range(reg_end_min + 1, 1440):
+        nominal_line[m] = y_reduced_end + max_capacity * ((m - reg_end_min) / 60)
+        if nominal_line[m] >= cumulative_arrivals[m]:
+            intercepts.append(m)
+            if len(intercepts) == 2:
+                break
+
+    # Determine intercept hour
+    if len(intercepts) >= 2:
+        intercept_minute = intercepts[1]
+        intercept_hour = intercept_minute / 60
+    else:
+        intercept_hour = 24.0  # No intercept before end of day
+
+    return intercept_hour
 
 
 def plot_aggregated_demand(flights: list[Flight], reghstart: int, reghend: int, max_capacity: int,
@@ -734,6 +790,495 @@ def compute_GHP(filtered_arrivals: list['Flight'], slots: np.ndarray, rf_vector:
     # compute total statistics similar to print_delay_statistics
     return filtered_arrivals, total_cost
 
+
+def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStart: int, 
+                        HEnd: int, reduced_capacity: int, max_capacity: int) -> None:
+    """
+    Plot Air Delay, Ground Delay, Unrecoverable Delay, and Emissions against HFile values.
+    
+    Parameters:
+    arrival_flights: list[Flight] - All arrival flights
+    distThreshold: int - Distance threshold in km
+    HStart: int - Regulation start hour
+    HEnd: int - Regulation end hour
+    reduced_capacity: int - Reduced capacity during regulation
+    max_capacity: int - Maximum capacity
+    """
+    
+    # HFile values from 6h to 11h in 10-minute increments
+    hfile_values = []
+    for hour in range(6, 12):  # 6 to 11 hours
+        for minute in [0, 10, 20, 30, 40, 50]:
+            hfile_values.append(hour + minute/60)
+    
+    # Initialize lists to store metrics
+    air_delays = []
+    ground_delays = []
+    unrecoverable_delays = []
+    total_emissions = []
+    
+    print("\n" + "="*80)
+    print("ANALYZING HFILE VARIATIONS (6:00 to 11:00)")
+    print("="*80)
+    
+    # For each HFile value, compute the metrics
+    for HFile in hfile_values:
+        # Compute HNoReg properly for this HFile value
+        HNoReg = compute_hnoreg(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
+        
+        # Filter flights for this HFile
+        filtered_flights = filter_arrival_flights(arrival_flights, distThreshold, HStart, HNoReg, HFile)
+        
+        # Compute slots
+        Hstart_min = HStart * 60
+        Hend_min = HEnd * 60
+        HNoReg_min = HNoReg * 60
+        extended_HNoReg = HNoReg_min + 30
+        slots = compute_slots(Hstart_min, Hend_min, extended_HNoReg, reduced_capacity, max_capacity)
+        
+        # Assign slots
+        slotted_arrivals = assignSlotsGDP(filtered_flights, slots)
+        
+        # Calculate metrics
+        total_air_delay = 0
+        total_ground_delay = 0
+        total_unrecoverable_delay = 0
+        air_emissions = 0
+        ground_emissions = 0
+        
+        for flight in slotted_arrivals:
+            delay = getattr(flight, 'assigned_delay', 0)
+            delay_type = getattr(flight, 'delay_type', 'None')
+            
+            # Calculate unrecoverable delay
+            total_unrecoverable_delay += flight.computeunrecdel(delay, HStart)
+            
+            # Calculate delays and emissions by type
+            if delay_type == "Air":
+                total_air_delay += delay
+                air_emissions += flight.compute_air_del_emissions()
+            elif delay_type == "Ground":
+                total_ground_delay += delay
+                if delay > 60:
+                    ground_emissions += flight.compute_ground_del_emissions() / 9
+                else:
+                    ground_emissions += flight.compute_ground_del_emissions()
+        
+        # Store metrics
+        air_delays.append(total_air_delay)
+        ground_delays.append(total_ground_delay)
+        unrecoverable_delays.append(total_unrecoverable_delay)
+        total_emissions.append(air_emissions + ground_emissions)
+        
+        print(f"HFile={HFile:.2f}h: Air={total_air_delay:.1f}min, Ground={total_ground_delay:.1f}min, "
+              f"Unrec={total_unrecoverable_delay:.1f}min, Emissions={air_emissions + ground_emissions:.2f}kg CO2")
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(14, 8))
+    
+    # Plot delays on primary y-axis (left)
+    ax1.set_xlabel('HFile (hours)', fontsize=12, fontweight='bold')
+    ax1.set_ylabel('Delay (minutes)', fontsize=12, fontweight='bold')
+    
+    line1 = ax1.plot(hfile_values, air_delays, 'o-', color='blue', linewidth=2, 
+                     markersize=4, label='Air Delay (min)')
+    line2 = ax1.plot(hfile_values, ground_delays, 's-', color='red', linewidth=2, 
+                     markersize=4, label='Ground Delay (min)')
+    line3 = ax1.plot(hfile_values, unrecoverable_delays, '^-', color='orange', linewidth=2, 
+                     markersize=4, label='Unrecoverable Delay (min)')
+    
+    ax1.tick_params(axis='y', labelcolor='black')
+    ax1.grid(True, alpha=0.3, linestyle='--')
+    
+    # Create secondary y-axis for emissions (right)
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('Emissions (kg CO2)', fontsize=12, fontweight='bold')
+    
+    line4 = ax2.plot(hfile_values, total_emissions, 'd-', color='green', linewidth=2, 
+                     markersize=4, label='Total Emissions (kg CO2)')
+    
+    ax2.tick_params(axis='y', labelcolor='green')
+    
+    # Combine legends
+    lines = line1 + line2 + line3 + line4
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc='upper left', fontsize=10, framealpha=0.9)
+    
+    # Set title
+    plt.title('Impact of HFile on Air Delay, Ground Delay, Unrecoverable Delay, and Emissions', 
+              fontsize=14, fontweight='bold', pad=20)
+    
+    # Format x-axis to show hours properly (6:00 to 11:00)
+    ax1.set_xlim(6, 11)
+    ax1.set_xticks([i for i in range(6, 12)])
+    ax1.set_xticklabels([f'{i}:00' for i in range(6, 12)])
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print("="*80)
+    print("HFILE ANALYSIS COMPLETE")
+    print("="*80)
+
+
+def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, HStart: int, 
+                                     HEnd: int, reduced_capacity: int, max_capacity: int) -> None:
+    """
+    Plot Air Delay, Ground Delay, Unrecoverable Delay, and Emissions against Distance Threshold values.
+    
+    Parameters:
+    arrival_flights: list[Flight] - All arrival flights
+    HFile: int - Filing hour
+    HStart: int - Regulation start hour
+    HEnd: int - Regulation end hour
+    reduced_capacity: int - Reduced capacity during regulation
+    max_capacity: int - Maximum capacity
+    """
+    
+    # Distance threshold values from 0km to 3000km in 50km increments
+    dist_threshold_values = list(range(0, 3001, 50))
+    
+    # Initialize lists to store metrics
+    air_delays = []
+    ground_delays = []
+    unrecoverable_delays = []
+    total_emissions = []
+    
+    print("\n" + "="*80)
+    print("ANALYZING DISTANCE THRESHOLD VARIATIONS (0 to 3000km)")
+    print("="*80)
+    
+    # For each distance threshold value, compute the metrics
+    for distThreshold in dist_threshold_values:
+        # Compute HNoReg properly for this distance threshold
+        HNoReg = compute_hnoreg(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
+        
+        # Filter flights for this distance threshold
+        filtered_flights = filter_arrival_flights(arrival_flights, distThreshold, HStart, HNoReg, HFile)
+        
+        # Compute slots
+        Hstart_min = HStart * 60
+        Hend_min = HEnd * 60
+        HNoReg_min = HNoReg * 60
+        extended_HNoReg = HNoReg_min + 30
+        slots = compute_slots(Hstart_min, Hend_min, extended_HNoReg, reduced_capacity, max_capacity)
+        
+        # Assign slots
+        slotted_arrivals = assignSlotsGDP(filtered_flights, slots)
+        
+        # Calculate metrics
+        total_air_delay = 0
+        total_ground_delay = 0
+        total_unrecoverable_delay = 0
+        air_emissions = 0
+        ground_emissions = 0
+        
+        for flight in slotted_arrivals:
+            delay = getattr(flight, 'assigned_delay', 0)
+            delay_type = getattr(flight, 'delay_type', 'None')
+            
+            # Calculate unrecoverable delay
+            total_unrecoverable_delay += flight.computeunrecdel(delay, HStart)
+            
+            # Calculate delays and emissions by type
+            if delay_type == "Air":
+                total_air_delay += delay
+                air_emissions += flight.compute_air_del_emissions()
+            elif delay_type == "Ground":
+                total_ground_delay += delay
+                if delay > 60:
+                    ground_emissions += flight.compute_ground_del_emissions() / 9
+                else:
+                    ground_emissions += flight.compute_ground_del_emissions()
+        
+        # Store metrics
+        air_delays.append(total_air_delay)
+        ground_delays.append(total_ground_delay)
+        unrecoverable_delays.append(total_unrecoverable_delay)
+        total_emissions.append(air_emissions + ground_emissions)
+        
+        # Print progress every 500km
+        if distThreshold % 500 == 0 or distThreshold == 200:
+            print(f"DistThreshold={distThreshold}km: Air={total_air_delay:.1f}min, Ground={total_ground_delay:.1f}min, "
+                  f"Unrec={total_unrecoverable_delay:.1f}min, Emissions={air_emissions + ground_emissions:.2f}kg CO2")
+    
+    # Create the plot
+    fig, ax1 = plt.subplots(figsize=(14, 8))
+    
+    # Plot delays on primary y-axis (left)
+    ax1.set_xlabel("Distance Threshold (km)", fontsize=12, fontweight="bold")
+    ax1.set_ylabel("Delay (minutes)", fontsize=12, fontweight="bold")
+    
+    line1 = ax1.plot(dist_threshold_values, air_delays, "o-", color="blue", linewidth=2, 
+                     markersize=3, label="Air Delay (min)")
+    line2 = ax1.plot(dist_threshold_values, ground_delays, "s-", color="red", linewidth=2, 
+                     markersize=3, label="Ground Delay (min)")
+    line3 = ax1.plot(dist_threshold_values, unrecoverable_delays, "^-", color="orange", linewidth=2, 
+                     markersize=3, label="Unrecoverable Delay (min)")
+    
+    ax1.tick_params(axis="y", labelcolor="black")
+    ax1.grid(True, alpha=0.3, linestyle="--")
+    
+    # Create secondary y-axis for emissions (right)
+    ax2 = ax1.twinx()
+    ax2.set_ylabel("Emissions (kg CO2)", fontsize=12, fontweight="bold")
+    
+    line4 = ax2.plot(dist_threshold_values, total_emissions, "d-", color="green", linewidth=2, 
+                     markersize=3, label="Total Emissions (kg CO2)")
+    
+    ax2.tick_params(axis="y", labelcolor="green")
+    
+    # Combine legends
+    lines = line1 + line2 + line3 + line4
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc="best", fontsize=10, framealpha=0.9)
+    
+    # Set title
+    plt.title("Impact of Distance Threshold on Air Delay, Ground Delay, Unrecoverable Delay, and Emissions", 
+              fontsize=14, fontweight="bold", pad=20)
+    
+    # Format x-axis (0 to 3000km)
+    ax1.set_xlim(0, 3000)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print("="*80)
+    print("DISTANCE THRESHOLD ANALYSIS COMPLETE")
+    print("="*80)
+
+
+def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int, 
+                     reduced_capacity: int, max_capacity: int) -> None:
+    """
+    Create 3D surface plots and heatmap for HFile vs Distance Threshold analysis.
+    Generates 4 subplots:
+    1. 3D surface: Unrecoverable Delay
+    2. 3D surface: Air Delay  
+    3. 3D surface: Total Emissions
+    4. Heatmap: Combined normalized score with optimal point
+    
+    Parameters:
+    arrival_flights: list[Flight] - All arrival flights
+    HStart: int - Regulation start hour
+    HEnd: int - Regulation end hour
+    reduced_capacity: int - Reduced capacity during regulation
+    max_capacity: int - Maximum capacity
+    """
+    from mpl_toolkits.mplot3d import Axes3D
+    import sys
+    import io
+    
+    print("\n" + "="*80)
+    print("GENERATING 3D ANALYSIS: HFILE vs DISTANCE THRESHOLD")
+    print("="*80)
+    
+    # Define ranges
+    hfile_values = []
+    for hour in range(6, 12):  # 6 to 11 hours
+        for minute in [0, 10, 20, 30, 40, 50]:
+            hfile_values.append(hour + minute/60)
+    
+    dist_threshold_values = list(range(0, 3001, 50))
+    
+    # Initialize 2D arrays to store results
+    unrecoverable_delays = np.zeros((len(hfile_values), len(dist_threshold_values)))
+    air_delays = np.zeros((len(hfile_values), len(dist_threshold_values)))
+    total_emissions = np.zeros((len(hfile_values), len(dist_threshold_values)))
+    
+    print(f"Computing {len(hfile_values)} HFile values × {len(dist_threshold_values)} distance thresholds = {len(hfile_values) * len(dist_threshold_values)} iterations...")
+    print("Suppressing console output during computation...")
+    
+    # Compute metrics for each combination
+    iteration = 0
+    total_iterations = len(hfile_values) * len(dist_threshold_values)
+    
+    # Suppress stdout during loop to avoid clutter
+    original_stdout = sys.stdout
+    
+    for i, HFile in enumerate(hfile_values):
+        for j, distThreshold in enumerate(dist_threshold_values):
+            iteration += 1
+            
+            # Print progress every 100 iterations (restore stdout temporarily)
+            if iteration % 100 == 0 or iteration == total_iterations:
+                sys.stdout = original_stdout
+                print(f"Progress: {iteration}/{total_iterations} ({100*iteration/total_iterations:.1f}%)")
+                sys.stdout = io.StringIO()  # Suppress again
+            
+            # Suppress console output for these function calls
+            if sys.stdout == original_stdout:
+                sys.stdout = io.StringIO()
+            # Suppress console output for these function calls
+            if sys.stdout == original_stdout:
+                sys.stdout = io.StringIO()
+            
+            # Compute HNoReg
+            HNoReg = compute_hnoreg(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
+            
+            # Filter flights
+            filtered_flights = filter_arrival_flights(arrival_flights, distThreshold, HStart, HNoReg, HFile)
+            
+            # Compute slots
+            Hstart_min = HStart * 60
+            Hend_min = HEnd * 60
+            HNoReg_min = HNoReg * 60
+            extended_HNoReg = HNoReg_min + 30
+            slots = compute_slots(Hstart_min, Hend_min, extended_HNoReg, reduced_capacity, max_capacity)
+            
+            # Assign slots
+            slotted_arrivals = assignSlotsGDP(filtered_flights, slots)
+            
+            # Calculate metrics
+            total_air_delay = 0
+            total_unrecoverable_delay = 0
+            air_emissions = 0
+            ground_emissions = 0
+            
+            for flight in slotted_arrivals:
+                delay = getattr(flight, 'assigned_delay', 0)
+                delay_type = getattr(flight, 'delay_type', 'None')
+                
+                # Calculate unrecoverable delay
+                total_unrecoverable_delay += flight.computeunrecdel(delay, HStart)
+                
+                # Calculate delays and emissions by type
+                if delay_type == "Air":
+                    total_air_delay += delay
+                    air_emissions += flight.compute_air_del_emissions()
+                elif delay_type == "Ground":
+                    if delay > 60:
+                        ground_emissions += flight.compute_ground_del_emissions() / 9
+                    else:
+                        ground_emissions += flight.compute_ground_del_emissions()
+            
+            # Store in 2D arrays
+            unrecoverable_delays[i, j] = total_unrecoverable_delay
+            air_delays[i, j] = total_air_delay
+            total_emissions[i, j] = air_emissions + ground_emissions
+    
+    # Restore stdout
+    sys.stdout = original_stdout
+    print("Computation complete! Creating visualizations...")
+    
+    # Create meshgrid for 3D plotting
+    X, Y = np.meshgrid(dist_threshold_values, hfile_values)
+    
+    # Create figure with 2x2 subplots
+    fig = plt.figure(figsize=(20, 16))
+    
+    # 1. 3D Surface: Unrecoverable Delay
+    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+    surf1 = ax1.plot_surface(X, Y, unrecoverable_delays, cmap='viridis', alpha=0.9, edgecolor='none')
+    ax1.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
+    ax1.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
+    ax1.set_zlabel('Unrecoverable Delay (min)', fontsize=10, fontweight='bold')
+    ax1.set_title('Unrecoverable Delay vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
+    fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5)
+    
+    # 2. 3D Surface: Air Delay
+    ax2 = fig.add_subplot(2, 2, 2, projection='3d')
+    surf2 = ax2.plot_surface(X, Y, air_delays, cmap='plasma', alpha=0.9, edgecolor='none')
+    ax2.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
+    ax2.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
+    ax2.set_zlabel('Air Delay (min)', fontsize=10, fontweight='bold')
+    ax2.set_title('Air Delay vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
+    fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5)
+    
+    # 3. 3D Surface: Total Emissions
+    ax3 = fig.add_subplot(2, 2, 3, projection='3d')
+    surf3 = ax3.plot_surface(X, Y, total_emissions, cmap='inferno', alpha=0.9, edgecolor='none')
+    ax3.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
+    ax3.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
+    ax3.set_zlabel('Total Emissions (kg CO2)', fontsize=10, fontweight='bold')
+    ax3.set_title('Total Emissions vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
+    fig.colorbar(surf3, ax=ax3, shrink=0.5, aspect=5)
+    
+    # 4. Heatmap: Combined normalized score
+    ax4 = fig.add_subplot(2, 2, 4)
+    
+    # Normalize each metric to 0-1 scale (lower is better)
+    norm_unrec = (unrecoverable_delays - unrecoverable_delays.min()) / (unrecoverable_delays.max() - unrecoverable_delays.min() + 1e-10)
+    norm_air = (air_delays - air_delays.min()) / (air_delays.max() - air_delays.min() + 1e-10)
+    norm_emissions = (total_emissions - total_emissions.min()) / (total_emissions.max() - total_emissions.min() + 1e-10)
+    
+    # Define weights for each metric (adjust these based on priority)
+    # Higher weight = more importance in the final score
+    weight_unrec = 10.0      # Unrecoverable delay weight
+    weight_air = 10.0         # Air delay weight
+    weight_emissions = 1.0   # Emissions weight
+    
+    # Combined score with weighted normalization
+    combined_score = (weight_unrec * norm_unrec + 
+                     weight_air * norm_air + 
+                     weight_emissions * norm_emissions)
+    
+    # Normalize combined score to 0-1 for better visualization
+    combined_score = (combined_score - combined_score.min()) / (combined_score.max() - combined_score.min() + 1e-10)
+    
+    # Find optimal point (minimum combined score)
+    min_idx = np.unravel_index(np.argmin(combined_score), combined_score.shape)
+    optimal_hfile = hfile_values[min_idx[0]]
+    optimal_dist = dist_threshold_values[min_idx[1]]
+    
+    # Create heatmap
+    im = ax4.imshow(combined_score, cmap='RdYlGn_r', aspect='auto', origin='lower',
+                    extent=[dist_threshold_values[0], dist_threshold_values[-1], 
+                           hfile_values[0], hfile_values[-1]])
+    
+    # Mark optimal point
+    ax4.plot(optimal_dist, optimal_hfile, 'b*', markersize=20, markeredgecolor='white', 
+             markeredgewidth=2, label=f'Optimal: HFile={optimal_hfile:.2f}h, Dist={optimal_dist}km')
+    
+    ax4.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
+    ax4.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
+    ax4.set_title(f'Combined Weighted Score Heatmap\n(Weights: Unrec={weight_unrec}, Air={weight_air}, Emis={weight_emissions})', 
+                  fontsize=11, fontweight='bold')
+    
+    # Add colorbar
+    cbar = fig.colorbar(im, ax=ax4)
+    cbar.set_label('Combined Score', fontsize=10)
+    
+    # Add legend
+    ax4.legend(loc='upper right', fontsize=9, framealpha=0.9)
+    
+    # Add grid
+    ax4.grid(True, alpha=0.3, linestyle='--')
+    
+    plt.tight_layout()
+    
+    # Save the figure
+    output_filename = 'HFile_vs_DistThreshold_3D_Analysis.jpg'
+    plt.savefig(output_filename, dpi=300, bbox_inches='tight', format='jpg')
+    print(f"\nFigure saved as: {output_filename}")
+    
+    plt.show()
+    
+    # Print data ranges to understand scales
+    print("\n" + "="*80)
+    print("DATA RANGES (Raw Values):")
+    print("="*80)
+    print(f"Unrecoverable Delay: {unrecoverable_delays.min():.1f} - {unrecoverable_delays.max():.1f} minutes (Range: {unrecoverable_delays.max() - unrecoverable_delays.min():.1f})")
+    print(f"Air Delay:           {air_delays.min():.1f} - {air_delays.max():.1f} minutes (Range: {air_delays.max() - air_delays.min():.1f})")
+    print(f"Total Emissions:     {total_emissions.min():.2f} - {total_emissions.max():.2f} kg CO2 (Range: {total_emissions.max() - total_emissions.min():.2f})")
+    print("="*80)
+    print(f"\nWeights applied:")
+    print(f"  Unrecoverable Delay: {weight_unrec}")
+    print(f"  Air Delay: {weight_air}")
+    print(f"  Emissions: {weight_emissions}")
+    
+    # Print optimal values
+    print("\n" + "="*80)
+    print("OPTIMAL CONFIGURATION:")
+    print("="*80)
+    print(f"HFile: {optimal_hfile:.2f} hours ({int(optimal_hfile)}:{int((optimal_hfile % 1) * 60):02d})")
+    print(f"Distance Threshold: {optimal_dist} km")
+    print(f"\nAt this configuration:")
+    print(f"  Unrecoverable Delay: {unrecoverable_delays[min_idx[0], min_idx[1]]:.1f} minutes")
+    print(f"  Air Delay: {air_delays[min_idx[0], min_idx[1]]:.1f} minutes")
+    print(f"  Total Emissions: {total_emissions[min_idx[0], min_idx[1]]:.2f} kg CO2")
+    print(f"  Combined Normalized Score: {combined_score[min_idx[0], min_idx[1]]:.4f}")
+    print("="*80)
 
 
 if __name__ == "__main__":

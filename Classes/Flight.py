@@ -74,7 +74,8 @@ class Flight:
         elif distance > 12000:
             distance = 12000
 
-        co2_ask = e.compute_co2_ask(distance, seats)
+        # Use force=True to bypass strict validation for edge cases
+        co2_ask = e.compute_co2_ask(distance, seats, force=True)
 
         total_co2 = co2_ask * seats * velocity * (1/1000) * 60 *(1/1000)
         return total_co2

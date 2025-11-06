@@ -114,7 +114,22 @@ f.plot_slotted_arrivals(slotted_arrivals_cost, max_capacity, HStart, HEnd)
 f.print_delay_statistics(slotted_arrivals_cost)
 
 
+# Plot HFile analysis graph
+print("\n" + "="*80)
+print("GENERATING HFILE ANALYSIS GRAPH")
+print("="*80)
+f.plot_hfile_analysis(arrival_flights, distThreshold, HStart, HEnd, reduced_capacity, max_capacity)
 
 
+# Plot Distance Threshold analysis graph
+print("\n" + "="*80)
+print("GENERATING DISTANCE THRESHOLD ANALYSIS GRAPH")
+print("="*80)
+f.plot_distance_threshold_analysis(arrival_flights, HFile, HStart, HEnd, reduced_capacity, max_capacity)
 
 
+# Plot 3D analysis with HFile vs Distance Threshold
+print("\n" + "="*80)
+print("GENERATING 3D ANALYSIS: HFILE vs DISTANCE THRESHOLD")
+print("="*80)
+f.plot_3d_analysis(arrival_flights, HStart, HEnd, reduced_capacity, max_capacity)
