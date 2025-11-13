@@ -51,7 +51,7 @@ otpcounter: int = 0
 air_del_emission_count = 0
 ground_del_emission_count = 0
 
-rf = []
+rf_GDP = []
 
 for i, flight in enumerate(sorted_flights, 1):
     original_eta = flight.arr_time.strftime('%H:%M:%S')
@@ -75,7 +75,7 @@ for i, flight in enumerate(sorted_flights, 1):
     if flight.delay_type == "Air":
         air_emission = flight.compute_air_del_emissions()
         air_del_emission_count += air_emission
-        rf.append(air_emission)
+        rf_GDP.append(air_emission)
     if flight.delay_type == "Ground":
         ground_emission = flight.compute_ground_del_emissions()
         if delay > 60:
@@ -83,7 +83,7 @@ for i, flight in enumerate(sorted_flights, 1):
             ground_del_emission_count += flight.compute_ground_del_emissions()
         else:
             ground_del_emission_count += flight.compute_ground_del_emissions()
-        rf.append(ground_emission)
+        rf_GDP.append(ground_emission)
 
 
 print("="*80)

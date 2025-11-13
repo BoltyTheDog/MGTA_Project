@@ -59,11 +59,17 @@ class Flight:
         return unrecoverabledelay
 
 
-    def compute_air_del_emissions(self) -> float: #return kg CO2/min in air delay flights (exempt flights)
+    def compute_air_del_emissions(self, delay: int, objective: str) -> float: #return kg CO2/min in air delay flights (exempt flights)
 
         seats = self.seats
-        distance = self.flight_distance
         velocity = self.cruise_spd
+        distance = 0
+        if objective == "delay":
+            distance = self.cruise_spd*delay
+        if objective == "flight":
+            distance = self.flight_distance
+        if objective == "total":
+            distance = self.cruise_spd*delay + self.flight_distance
 
         if seats < 50:
             seats = 50
@@ -73,6 +79,8 @@ class Flight:
             distance = 100
         elif distance > 12000:
             distance = 12000
+
+
 
         # Use force=True to bypass strict validation for edge cases
         co2_ask = e.compute_co2_ask(distance, seats, force=True)

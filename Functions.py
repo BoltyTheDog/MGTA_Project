@@ -5,7 +5,7 @@ from datetime import datetime,timedelta
 from Classes.Flight import Flight
 import numpy as np
 from collections import Counter
-from scipy.optimize import linprog, Bounds
+from scipy.optimize import linprog
 
 
 def compute_slots(hstart: int, hend: int, hnoreg: float, paar: int, aar: int) -> np.ndarray:
@@ -710,7 +710,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
 def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
-      - filtered_arrivals: list of Flig     ht objects (they must have .delay_type, .arr_time, .seats, etc)
+      - filtered_arrivals: list of Flight objects (they must have .delay_type, .arr_time, .seats, etc)
       - slots: numpy array with first column slot_time (in minutes)
       - rf_vector: optional list with one rf per flight (len = number of flights needing slots).
                    If None and objective == 'emissions', rf computed from flight emissions per minute
@@ -803,7 +803,81 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
     return filtered_arrivals
 
 
-def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStart: int, 
+def compute_Rail_Emissions_D2DTime(filtered_arrivals: list['Flight']):
+    airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
+    rail_trips = [f for f in filtered_arrivals if f.departure_airport in airports]
+    rail_trip_time = [38, 99, 310, 376, 396]
+    rail_emissions = [2.9, 17.4, 7.2, 31.8, 32.5]
+
+    total_rail_emissions = 0
+    D2D_rail_time = 0
+
+    for f in rail_trips:
+        for i in range(len(airports)):
+            if f.departure_airport == airports[i]:
+                total_rail_emissions += rail_emissions[i]
+                D2D_rail_time += (rail_trip_time[i] + 60)
+    return rail_trips, total_rail_emissions, D2D_rail_time
+
+def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight'], delay: int):
+    airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
+    flight_trips = [f for f in filtered_arrivals if f.departure_airport in airports]
+    flight_trip_time = [..., 164, 153, 178, 181]
+    flight_emissions = [..., 115.41, 128.39, 146.94, 139.54]
+
+    total_flight_emissions = 0
+    D2D_aircraft_time = 0
+
+    for f in flight_trips:
+        for i in range(len(airports)):
+            if f.departure_airport == airports[i]:
+                total_flight_emissions += flight_emissions[i]
+                D2D_aircraft_time += (flight_trip_time[i] + 150 + delay)
+    return flight_trips, total_flight_emissions, D2D_aircraft_time
+
+def plot_train_vs_flight_emissions_times():
+    # Datos base
+    airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
+    rail_emissions = [2.9, 17.4, 7.2, 31.8, 32.5]
+    flight_emissions = [..., 115.41, 128.39, 146.94, 139.54]
+    rail_time = [38 + 60, 99 + 60, 310 + 60, 376 + 60, 396 + 60]
+    flight_time = [... + 150, 164 + 150, 153 + 150, 178 + 150, 181 + 150]
+
+    # Posiciones en el eje X
+    x = np.arange(len(airports))
+    width = 0.35
+
+    # Crear figura
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    # Barras de emisiones
+    ax1.bar(x - width/2, rail_emissions, width, label='Rail CO₂ (kg)')
+    ax1.bar(x + width/2, flight_emissions, width, label='Flight CO₂ (kg)')
+    ax1.set_ylabel('CO₂ emissions (kg)')
+    ax1.set_xlabel('Departure Airport')
+    ax1.set_title('Comparación: emisiones y tiempos puerta a puerta (Tren vs Avión)')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(airports)
+    ax1.legend(loc='upper left')
+
+    # Eje secundario para tiempos
+    ax2 = ax1.twinx()
+    ax2.plot(x, rail_time, marker='o', color='green', label='Rail time (min)')
+    ax2.plot(x, flight_time, marker='o', color='red', label='Flight time (min)')
+    ax2.set_ylabel('Door-to-door time (min)')
+    ax2.legend(loc='upper right')
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+
+
+
+
+def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStart: int,
                         HEnd: int, reduced_capacity: int, max_capacity: int) -> None:
     """
     Plot Air Delay, Ground Delay, Unrecoverable Delay, and Emissions against HFile values.
@@ -868,7 +942,7 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
             # Calculate delays and emissions by type
             if delay_type == "Air":
                 total_air_delay += delay
-                air_emissions += flight.compute_air_del_emissions()
+                air_emissions += flight.compute_air_del_emissions(delay, "delay")
             elif delay_type == "Ground":
                 total_ground_delay += delay
                 if delay > 60:
