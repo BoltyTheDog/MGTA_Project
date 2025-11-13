@@ -1,9 +1,12 @@
+from typing import Literal
+
 import matplotlib.pyplot as plt
 from datetime import datetime,timedelta
 from Classes.Flight import Flight
 import numpy as np
 from collections import Counter
-import pulp
+from scipy.optimize import linprog, Bounds
+
 
 def compute_slots(hstart: int, hend: int, hnoreg: float, paar: int, aar: int) -> np.ndarray:
     """
@@ -660,12 +663,54 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
     print("="*80)
 
 
+def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: int,
+                slot_times: list[int]) -> np.ndarray:
+    penalty_const = 1e12
+    index_count = slot_no * flight_no
+    r_f = np.zeros(index_count)
+    cost_arr = np.ones(index_count)
 
-#TODO use penalty functions to avoid 10h delay
-def compute_GHP(filtered_arrivals: list['Flight'], slots: np.ndarray, rf_vector: list | None = None, objective: str = 'delay'):
+    index = 0
+    for i in range(flight_no):
+        flight = flights[i]  # Get the current flight
+        original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute
+
+        for j in range(slot_no):
+            delay = slot_times[j] - original_arrival
+            if delay < 0:
+                delay = penalty_const
+
+            # Apply objective-specific costs
+            match objective:
+                case "emissions":
+                    if flight.delay_type.upper() == "AIR":
+                        emissions = flight.compute_air_del_emissions()
+                    elif flight.delay_type.upper() == "GROUND":
+                        emissions = flight.compute_ground_del_emissions()
+                    else:
+                        emissions = 1
+                    r_f[index] = delay * emissions
+
+                case "costs":
+                    cost = flight.compute_costs(delay)
+                    r_f[index] = cost
+
+                case "delay":  # Default case
+                    r_f[index] = delay
+
+            index += 1
+
+    return r_f
+
+
+
+
+
+#TODO cost function
+def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
-      - filtered_arrivals: list of Flight objects (they must have .delay_type, .arr_time, .seats, etc)
+      - filtered_arrivals: list of Flig     ht objects (they must have .delay_type, .arr_time, .seats, etc)
       - slots: numpy array with first column slot_time (in minutes)
       - rf_vector: optional list with one rf per flight (len = number of flights needing slots).
                    If None and objective == 'emissions', rf computed from flight emissions per minute
@@ -673,122 +718,89 @@ def compute_GHP(filtered_arrivals: list['Flight'], slots: np.ndarray, rf_vector:
       - objective: 'delay' or 'emissions'
     Returns: list of flights with assigned_slot_time and assigned_delay updated (same convention que assignSlotsGDP)
     """
-    # Helper: convert datetime -> minutes since midnight
-    def time_to_minutes(time_obj):
-        return time_obj.hour * 60 + time_obj.minute
 
     # Select flights that need slot assignment (Air or Ground)
     flights_needing_slots = [f for f in filtered_arrivals if f.delay_type in ("Air", "Ground")]
-    flights_not_needing = [f for f in filtered_arrivals if f.delay_type == "None"]
     n_f = len(flights_needing_slots)
     if n_f == 0:
         print("No flights require regulation. Nothing to solve.")
         return filtered_arrivals
 
-    slot_times = [int(s[0]) for s in slots]  # minutos
+    slot_times = [int(s[0]) for s in slots]  # minutes
     n_s = len(slot_times)
 
-    # Map index
-    f_index = {i: flights_needing_slots[i] for i in range(n_f)}
-    s_index = {j: slot_times[j] for j in range(n_s)}
+    r_f = compute_r_f(flights_needing_slots, str(objective), n_s, n_f, slot_times)
 
-    # Build rf per flight (per-minute cost factor)
-    rf = [1.0] * n_f  # default to 1 (validation)
-    if rf_vector is not None:
-        # If provided, expect same order as flights_needing_slots
-        if len(rf_vector) != n_f:
-            print("Warning: rf_vector length mismatch; ignoring rf_vector and computing from flights.")
-        else:
-            rf = list(rf_vector)
-    elif objective == 'emissions':
-        # compute per-flight emissions per minute depending on delay_type
-        rf = []
-        for f in flights_needing_slots:
-            if f.delay_type == "Air":
-                # compute_air_del_emissions returns kg CO2/min according to your Flight class docstring
-                rf.append(f.compute_air_del_emissions())
-            else:  # Ground
-                rf.append(f.compute_ground_del_emissions())
+    # Number of variables: n_f * n_s
+    n_vars = n_f * n_s
 
-    # Build candidate slot-feasible matrix: allow only slots >= ETA
-    ETA_minutes = [time_to_minutes(f.arr_time) for f in flights_needing_slots]
-    feasible_pairs = []
+    # CONSTRAINT 1: Each flight assigned to exactly 1 slot
+
+    a_eq = np.zeros((n_f, n_vars))
     for i in range(n_f):
-        for j in range(n_s):
-            if s_index[j] >= ETA_minutes[i]:
-                feasible_pairs.append((i, j))
+        a_eq[i, i * n_s:(i + 1) * n_s] = 1
+    b_eq = np.ones(n_f)
 
-    # Create pulp problem
-    prob = pulp.LpProblem("GHP_integer", pulp.LpMinimize)
+    # CONSTRAINT 2: Each slot capacity not exceeded
 
-    # Decision variables x_i_j binary
-    x = pulp.LpVariable.dicts("x", (range(n_f), range(n_s)), lowBound=0, upBound=1, cat=pulp.LpBinary)
-
-    # Objective: sum rf[i] * (slot_time - ETA_i) * x[i,j]
-    prob += pulp.lpSum([rf[i] * (s_index[j] - ETA_minutes[i]) * x[i][j]
-                        for (i, j) in feasible_pairs])
-
-    # Constraints:
-    # 1) Each flight assigned exactly 1 slot (over feasible j)
-    for i in range(n_f):
-        feasible_js = [j for (ii, j) in feasible_pairs if ii == i]
-        prob += pulp.lpSum([x[i][j] for j in feasible_js]) == 1, f"Assign_flight_{i}"
-
-    # 2) Each slot at most 1 flight
+    a_ub = np.zeros((n_s, n_vars))
     for j in range(n_s):
-        feasible_is = [i for (i, jj) in feasible_pairs if jj == j]
-        if feasible_is:
-            prob += pulp.lpSum([x[i][j] for i in feasible_is]) <= 1, f"Slot_capacity_{j}"
+        a_ub[j, j::n_s] = 1
+    b_ub = np.ones(n_s)
 
-    # Solve
-    solver = pulp.PULP_CBC_CMD(msg=False)  # msg=True to see solver log
-    result = prob.solve(solver)
+    # Solve as integer program
+    result = linprog(r_f, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq,
+                     bounds=(0, 1), method='highs', integrality=1)
 
-    status = pulp.LpStatus[prob.status]
-    print("LP solve status:", status)
+    if result.success:
+        print("Optimization successful!")
 
-    if status not in ("Optimal", "Integer Feasible"):
-        print("Warning: solver did not find optimal solution. Status:", status)
-        # still try to extract assignments if any
+        # Print assignment results with delays
+        print("\nASSIGNMENTS & DELAYS:")
+        print("=" * 60)
+        total_air_delay = 0
+        total_ground_delay = 0
 
-    total_cost = pulp.value(prob.objective)
-    if total_cost is None:
-        total_cost = 0.0
-        print("Warning: Could not retrieve objective value, total cost set to 0")
+        for i in range(n_f):
+            for j in range(n_s):
+                var_index = i * n_s + j
+                if abs(result.x[var_index] - 1) < 1e-6:
+                    flight = flights_needing_slots[i]
+                    callsign = getattr(flight, 'callsign', f'Flight{i + 1}')
 
-    # Reset assigned fields for all flights
-    for f in filtered_arrivals:
-        f.assigned_slot_time = None
-        f.assigned_delay = 0
-        f.original_eta_minutes = time_to_minutes(f.arr_time)
+                    # Calculate delays
+                    original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute
+                    slot_time = slot_times[j]
+                    total_delay = max(0, slot_time - original_arrival)
 
-    # For flights not needing slots, keep original
-    for f in flights_not_needing:
-        f.assigned_slot_time = time_to_minutes(f.arr_time)
-        f.assigned_delay = 0
+                    # Split delay based on delay type
+                    if flight.delay_type == "Air":
+                        air_delay = total_delay
+                        ground_delay = 0
+                    else:  # "Ground"
+                        air_delay = 0
+                        ground_delay = total_delay
 
-    # Read variables and assign slots
-    assigned_count = 0
-    used_slots = set()
-    for i in range(n_f):
-        for j in range(n_s):
-            try:
-                val = pulp.value(x[i][j])
-            except Exception:
-                val = None
-            if val is not None and val > 0.5:
-                slot_time = s_index[j]
-                flight_obj = flights_needing_slots[i]
-                flight_obj.assigned_slot_time = slot_time
-                flight_obj.assigned_delay = slot_time - ETA_minutes[i]
-                assigned_count += 1
-                used_slots.add(j)
-                break  # flight assigned, next flight
+                    # Update totals
+                    total_air_delay += air_delay
+                    total_ground_delay += ground_delay
 
-    print(f"Assigned {assigned_count}/{n_f} regulated flights to slots (objective: {objective})")
+                    print(f"{callsign} → Slot {j + 1} | "
+                          f"Air: {air_delay:3d}min | "
+                          f"Ground: {ground_delay:3d}min | "
+                          f"Total: {total_delay:3d}min")
 
-    # compute total statistics similar to print_delay_statistics
-    return filtered_arrivals, total_cost
+        # Print summary
+        print("=" * 60)
+        print(f"TOTALS: "
+              f"Air: {total_air_delay:3d}min | "
+              f"Ground: {total_ground_delay:3d}min | "
+              f"Total: {total_air_delay + total_ground_delay:3d}min")
+
+    else:
+        print("Optimization failed:", result.message)
+
+    return filtered_arrivals
 
 
 def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStart: int, 

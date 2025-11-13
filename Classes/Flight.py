@@ -84,7 +84,7 @@ class Flight:
         fuel_consum = 0
         match self.cat:
             case "A":
-                pass
+                fuel_consum = 0
             case "B":
                 fuel_consum = (50/60)
             case "C":
@@ -98,6 +98,9 @@ class Flight:
             case _:
                 raise ValueError("Invalid Category")
         return fuel_consum * 3.16
+
+    def compute_costs(self, delay: int) -> float:
+        ...
 
 
 if __name__ == "__main__":

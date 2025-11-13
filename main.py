@@ -96,8 +96,8 @@ print("Total of emissions/min from ground delay: ", ground_del_emission_count)
 
 
 # (unitary cost => rf = 1) -> total cost = total delay
-slotted_arrivals1, totalcost1 = f.compute_GHP(filtered_flights, slots, rf_vector=None, objective='delay')
-
+f.compute_GHP(filtered_flights, slots, objective='emissions')
+'''
 # minimizar emisiones
 slotted_arrivals_cost, totalcost2 = f.compute_GHP(filtered_flights, slots, rf_vector=rf, objective='emissions')
 
@@ -113,7 +113,7 @@ print("*"*80)
 f.plot_slotted_arrivals(slotted_arrivals_cost, max_capacity, HStart, HEnd)
 f.print_delay_statistics(slotted_arrivals_cost)
 
-
+'''
 # Plot HFile analysis graph
 print("\n" + "="*80)
 print("GENERATING HFILE ANALYSIS GRAPH")
