@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import emissions_fuel_model as e
+import pandas as pd
 
 class Flight:
     def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str,
@@ -107,8 +108,38 @@ class Flight:
                 raise ValueError("Invalid Category")
         return fuel_consum * 3.16
 
+    def cost_number(self, costs: pd.DataFrame, delay: int) -> float:
+        if costs.empty:
+            return 0.0
+        m = 1
+        n = 1
+        delay_thresholds = costs.columns.astype(int).values
+        cost_thresholds = costs[self.cat].tolist()
+        if delay < 5:
+            m = cost_thresholds[0] / delay_thresholds[0]
+            n = cost_thresholds[0] - m * delay_thresholds[0]
+        elif delay > 300:
+            m = (cost_thresholds[-1] - cost_thresholds[-2]) / (delay_thresholds[-1] - delay_thresholds[-2])
+            n = cost_thresholds[-1] - m * delay_thresholds[-1]
+
+        else:
+            for i in range(1, len(delay_thresholds) - 1):
+                if delay_thresholds[i] < delay < delay_thresholds[i + 1]:
+                    m = (cost_thresholds[i + 1] - cost_thresholds[i]) / (delay_thresholds[i + 1] - delay_thresholds[i])
+                    n = cost_thresholds[i + 1] - m * delay_thresholds[i + 1]
+
+        return m * delay + n
+
     def compute_costs(self, delay: int) -> float:
-        ...
+        ground_no_reac = pd.read_csv("../Data/Ground without reactionary costs.csv")
+        ground_reac = pd.read_csv("../Data/Ground with reactionary costs.csv")
+        costs = None
+        if self.delay_type == "Air":
+            costs = pd.read_csv("../Data/AirCosts.csv")
+        elif self.delay_type == "Ground":
+            ... #TODO reactionary condition
+
+        return self.cost_number(costs, delay)
 
 
 if __name__ == "__main__":

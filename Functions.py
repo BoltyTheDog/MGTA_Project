@@ -684,7 +684,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
             match objective:
                 case "emissions":
                     if flight.delay_type.upper() == "AIR":
-                        emissions = flight.compute_air_del_emissions()
+                        emissions = flight.compute_air_del_emissions(delay, "delay")
                     elif flight.delay_type.upper() == "GROUND":
                         emissions = flight.compute_ground_del_emissions()
                     else:
@@ -820,10 +820,10 @@ def compute_Rail_Emissions_D2DTime(filtered_arrivals: list['Flight']):
     return rail_trips, total_rail_emissions, D2D_rail_time
 
 def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight'], delay: int):
-    airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
+    airports = ["LEMD", "LFML", "LEZL", "LEMG"]
     flight_trips = [f for f in filtered_arrivals if f.departure_airport in airports]
-    flight_trip_time = [..., 164, 153, 178, 181]
-    flight_emissions = [..., 115.41, 128.39, 146.94, 139.54]
+    flight_trip_time = [164, 153, 178, 181]
+    flight_emissions = [115.41, 128.39, 146.94, 139.54]
 
     total_flight_emissions = 0
     D2D_aircraft_time = 0
@@ -839,9 +839,9 @@ def plot_train_vs_flight_emissions_times():
     # Datos base
     airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
     rail_emissions = [2.9, 17.4, 7.2, 31.8, 32.5]
-    flight_emissions = [..., 115.41, 128.39, 146.94, 139.54]
+    flight_emissions = [115.41, 128.39, 146.94, 139.54]
     rail_time = [38 + 60, 99 + 60, 310 + 60, 376 + 60, 396 + 60]
-    flight_time = [... + 150, 164 + 150, 153 + 150, 178 + 150, 181 + 150]
+    flight_time = [150, 164 + 150, 153 + 150, 178 + 150, 181 + 150]
 
     # Posiciones en el eje X
     x = np.arange(len(airports))
