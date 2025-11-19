@@ -11,7 +11,7 @@ from collections import Counter
 
 # imports for linear programming GHP algorithm WP3 (and numpy also for other matters as plots...)
 import numpy as np
-from scipy.optimize import linprog
+from scipy.optimize import linprog  # LINEAR PROGRAMMING LIBRARY
 
 
 def compute_slots(hstart: int, hend: int, hnoreg: float, paar: int, aar: int) -> np.ndarray:
@@ -89,6 +89,8 @@ def amount_flights_by_hour(flights: list[Flight], airline: str, hour1: int, hour
 
 def flight_by_callsign(flights: list[Flight], callsign: str) -> Flight | None:
     return next((f for f in flights if f.callsign == callsign), None)
+
+
 def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, reghend: int) -> None:
 
     if reghstart < 0:
@@ -931,45 +933,50 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
     print("="*80)
 
 
+# FUNCTION TO COMPUTE RF VECTOR FOR GHP (RF = 1, RF = EMISSIONS, RF = COSTS)
 def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: int,
                 slot_times: list[int]) -> np.ndarray:
-    penalty_const = 1e12
-    index_count = slot_no * flight_no
-    r_f = np.zeros(index_count)
+
+    penalty_const = 1e12  # penalty definition
+    index_count = slot_no * flight_no  # number of possible combination for slot assignment
+    r_f = np.zeros(index_count)  # first we set rf vector as all zeros
     cost_arr = np.ones(index_count)
 
     index = 0
-    air_costs = pd.read_csv("Data/AirCosts.csv")
-    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")
-    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")
+    air_costs = pd.read_csv("Data/AirCosts.csv")  # call the table for air delay costs
+    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")  # call the table for ground not reactionary delay
+    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")  # call the table for ground reactionary delay
     flight_data = pd.read_csv("Data/LEBL_10AUG2025_ECAC.csv", delimiter=";", encoding='latin-1')
 
+    # for each flight we iterate through the matrix of possible combinations
     for i in range(flight_no):
         flight = flights[i]  # Get the current flight
-        original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute
+        original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute  # original ETA to minutes
 
         for j in range(slot_no):
-            delay = slot_times[j] - original_arrival
+            delay = slot_times[j] - original_arrival  # delay = CTA (slot time) - ETA => CTA = ETA + delay
+
+            # if negative delay -> slot assigned BEFORE flight arrival -> IMPOSSIBLE -> high penalty
             if delay < 0:
                 delay = penalty_const
 
             # Apply objective-specific costs
             match objective:
-                case "emissions":
-                    if flight.delay_type.upper() == "AIR":
-                        emissions = flight.compute_air_del_emissions(delay, "delay")
-                    elif flight.delay_type.upper() == "GROUND":
-                        emissions = flight.compute_ground_del_emissions()
-                    else:
+                case "emissions":  # GHP computation minimizing CO2 EMISSIONS
+                    if flight.delay_type.upper() == "AIR":  # air delay
+                        emissions = flight.compute_air_del_emissions(delay, "delay")  # call compute air del emissions
+                    elif flight.delay_type.upper() == "GROUND":  # ground delay
+                        emissions = flight.compute_ground_del_emissions()  # call compute ground del emissions
+                    else:  # non delay -> no cost associated to the delay
                         emissions = 1
-                    r_f[index] = delay * emissions
+                    r_f[index] = delay * emissions  # remember that the emission units are [kgCO2/min]
 
-                case "costs":
-                    cost = flight.compute_costs(delay, air_costs, ground_no_reac_costs, ground_costs, flight_data)
-                    r_f[index] = cost
+                case "costs":  # GHP computation minimizing ECONOMIC COSTS for operators
+                    cost = flight.compute_costs(delay, air_costs, ground_no_reac_costs, ground_costs, flight_data)  # inputs for the functions: delay and tables
+                    r_f[index] = cost  # value of the economic cost that the delay, obtained by assign the flight f at slot t, generates
 
                 case "delay":  # Default case
-                    r_f[index] = delay
+                    r_f[index] = delay  # 1*delay
 
             index += 1
 
@@ -993,36 +1000,41 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
 
     # Select flights that need slot assignment (Air or Ground)
     flights_needing_slots = [f for f in filtered_arrivals if f.delay_type in ("Air", "Ground")]
+
+    # number of flights -> number of rows of the matrix
     n_f = len(flights_needing_slots)
     if n_f == 0:
         print("No flights require regulation. Nothing to solve.")
         return filtered_arrivals
 
+    # number of slots -> number of columns of the matrix
     slot_times = [int(s[0]) for s in slots]  # minutes
     n_s = len(slot_times)
 
+    #computation of rf vector (ALREADY COMPUTED AS A COST VECTOR)
     r_f = compute_r_f(flights_needing_slots, str(objective), n_s, n_f, slot_times)
 
     # Number of variables: n_f * n_s
     n_vars = n_f * n_s
 
-    # CONSTRAINT 1: Each flight assigned to exactly 1 slot
-
+    # --------------------------------------------------------
+    # CONSTRAINT 1: Each flight assigned to exactly 1 slot (summatory of possible slots for a unique flight is 1)
+    # EQUALITY CONSTRAINT
     a_eq = np.zeros((n_f, n_vars))
     for i in range(n_f):
         a_eq[i, i * n_s:(i + 1) * n_s] = 1
     b_eq = np.ones(n_f)
 
-    # CONSTRAINT 2: Each slot capacity not exceeded
-
+    # CONSTRAINT 2: Each slot capacity not exceeded (summatory of possible flights assigned to a unique slot <= 1, it could be assigned or not)
+    # INEQUALITY CONSTRAINT
     a_ub = np.zeros((n_s, n_vars))
     for j in range(n_s):
         a_ub[j, j::n_s] = 1
     b_ub = np.ones(n_s)
 
-    # Solve as integer program
+    # Solve as integer program thanks to SCIPY LIBRARY
     result = linprog(r_f, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq,
-                     bounds=(0, 1), method='highs', integrality=1)
+                     bounds=(0, 1), method='highs', integrality=1)  # INTEGER VARIABLES: integrality = 1, Binary variables: ub = 1, lb = 0
 
     if result.success:
         print("Optimization successful!")
@@ -1030,28 +1042,29 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
         # Print assignment results with delays
         print("\nASSIGNMENTS & DELAYS:")
         print("=" * 60)
-        total_air_delay = 0
-        total_ground_delay = 0
+        total_air_delay = 0  # accumulative total air delay summarying each particular air delay
+        total_ground_delay = 0  # accumulative total ground delay summarying each particular ground delay
 
         for i in range(n_f):
             for j in range(n_s):
                 var_index = i * n_s + j
-                if abs(result.x[var_index] - 1) < 1e-6:
-                    flight = flights_needing_slots[i]
-                    callsign = getattr(flight, 'callsign', f'Flight{i + 1}')
+                if abs(result.x[var_index] - 1) < 1e-6:  # if found that a flight f assigned to slot t (1-1 just to avoid problems)
+                    flight = flights_needing_slots[i]  # flight designated with del type "ground" or "air".
+
+                    callsign = getattr(flight, 'callsign', f'Flight{i + 1}')  # get callsign for possible reactionary delay
 
                     # Calculate delays
-                    original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute
+                    original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute  # ETA to minutes
                     slot_time = slot_times[j]
-                    total_delay = max(0, slot_time - original_arrival)
+                    total_delay = max(0, slot_time - original_arrival) # -> DELAY = CTA (slot time) - ETA (original arrival time)
 
                     # Split delay based on delay type
                     if flight.delay_type == "Air":
-                        air_delay = total_delay
-                        ground_delay = 0
+                        air_delay = total_delay  # all is air delay
+                        ground_delay = 0  # not ground delay
                     else:  # "Ground"
-                        air_delay = 0
-                        ground_delay = total_delay
+                        air_delay = 0  # not air delay
+                        ground_delay = total_delay  # all is ground delay
 
                     # Update totals
                     total_air_delay += air_delay
@@ -1072,7 +1085,8 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
     else:
         print("Optimization failed:", result.message)
 
-    return filtered_arrivals
+    return filtered_arrivals  # return of the updated list. #TODO
+
 
 
 # FUNCTION THAT COMPUTE THE RAIL EMISSIONS OF THE FLIGHTS THAT COULD yes BE REPLACED BY A LESS THAN 6 HOUR DIRECT TRAIN ROUTE FROM BCN

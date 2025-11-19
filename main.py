@@ -84,7 +84,7 @@ for i, flight in enumerate(sorted_flights, 1):
     print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
     if flight.delay_type == "Air":
-        air_emission = flight.compute_air_del_emissions(delay, "delay"delay, objective='delay')
+        air_emission = flight.compute_air_del_emissions(delay, "delay")
         air_del_emission_count += air_emission
         rf_GDP.append(air_emission)
     if flight.delay_type == "Ground":
