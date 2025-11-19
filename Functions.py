@@ -2,6 +2,9 @@ from typing import Literal
 
 import matplotlib.pyplot as plt
 from datetime import datetime,timedelta
+
+import pandas as pd
+
 from Classes.Flight import Flight
 import numpy as np
 from collections import Counter
@@ -68,7 +71,7 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
                     line_array[0], line_array[1], line_array[2], line_array[3],
                     int(line_array[5]), float(line_array[16]), dep_time, taxi_time,
                     arr_time, flight_duration, float(line_array[17]), line_array[11], int(line_array[12]),
-                    is_ecac
+                    line_array[4], is_ecac
                 ))
 
     return flights if flights else None
@@ -669,6 +672,11 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
     cost_arr = np.ones(index_count)
 
     index = 0
+    air_costs = pd.read_csv("Data/AirCosts.csv")
+    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")
+    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")
+    flight_data = pd.read_csv("Data/LEBL_10AUG2025_ECAC.csv", delimiter=";", encoding='latin-1')
+
     for i in range(flight_no):
         flight = flights[i]  # Get the current flight
         original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute
@@ -690,7 +698,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
                     r_f[index] = delay * emissions
 
                 case "costs":
-                    cost = flight.compute_costs(delay)
+                    cost = flight.compute_costs(delay, air_costs, ground_no_reac_costs, ground_costs, flight_data)
                     r_f[index] = cost
 
                 case "delay":  # Default case
@@ -704,7 +712,6 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
 
 
 
-#TODO cost function
 def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
@@ -1148,7 +1155,6 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     reduced_capacity: int - Reduced capacity during regulation
     max_capacity: int - Maximum capacity
     """
-    from mpl_toolkits.mplot3d import Axes3D
     import sys
     import io
     

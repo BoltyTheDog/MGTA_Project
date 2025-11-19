@@ -1,14 +1,16 @@
 from datetime import datetime, timedelta
+from typing import Literal
+
 import emissions_fuel_model as e
 import pandas as pd
-
 
 # DEFINITION OF THE CLASS FLIGHT CONTAINING ALL THE DATA INFORMATION FROM THE EXCELL OF THE STARTING POINT OF THE PROJECT.
 class Flight:
     def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str,
                  crz_fl: int, crz_spd: float, departure_time: datetime, taxi_time: timedelta,
                  arrival_time: datetime, flight_time: timedelta, flight_dis: float, category: str,
-                 seats: int, is_ecac: bool = True, is_exempt: bool = False, delay_type: str = "") -> None:
+                 seats: int, registration: str, is_ecac: bool = True, is_exempt: bool = False, delay_type: str = ""
+                 ) -> None:
         self.callsign = callsign
         self.airplane_model = airplane_model
         self.departure_airport = departure_airport
@@ -25,6 +27,7 @@ class Flight:
         self.is_ecac = is_ecac  # New: ECAC status
         self.is_exempt = is_exempt  # Exemption status
         self.delay_type = delay_type  # Delay type
+        self.registration = registration
 
     def __str__(self):
         return (f"Flight info:\n"
@@ -65,7 +68,7 @@ class Flight:
 
 
     #FUNCTION TO COMPUTE THE AIR DELAY EMISSIONS USING THE GIVEN FUNCTION BY THE TEACHER.
-    def compute_air_del_emissions(self, delay: int, objective: str) -> float: #return kg CO2/min in air delay flights (exempt flights)
+    def compute_air_del_emissions(self, delay: int, objective = Literal["delay", "flight", "total"]) -> float: #return kg CO2/min in air delay flights (exempt flights)
 
         seats = self.seats
         velocity = self.cruise_spd
@@ -102,28 +105,28 @@ class Flight:
         fuel_consum = 0
         match self.cat: #depending on the category of the aircraft, when at APU consumes X amount of fuel by hour so dividing by 60 we get kg fuel/min
             case "A":
-                fuel_consum = (260/60) #High aircrafts consumes the most
+                fuel_consum = (260 / 60)
             case "B":
-                fuel_consum = (1700/60)
+                fuel_consum = (170 / 60)
             case "C":
-                fuel_consum = (110/60)
+                fuel_consum = (110 / 60)
             case "D":
-                fuel_consum = (75/60)
+                fuel_consum = (75 / 60)
             case "E":
-                fuel_consum = (50/60)
+                fuel_consum = (50 / 60)
             case "F":
-                fuel_consum = 0 #Light aircrafts consumes almost nothing, so we consider it null.
+                fuel_consum = 0
             case _:
                 raise ValueError("Invalid Category")
-        return fuel_consum * 3.16 #multiplying by a factor indicating that 1 kg of fuel = 3.6 kg of C02
+        return fuel_consum * 3.16
 
     def cost_number(self, costs: pd.DataFrame, delay: int) -> float:
         if costs.empty:
             return 0.0
         m = 1
         n = 1
-        delay_thresholds = costs.columns.astype(int).values
-        cost_thresholds = costs[self.cat].tolist()
+        delay_thresholds = costs.columns[1:].astype(int).values
+        cost_thresholds = costs[costs['Delay'] == self.cat].iloc[0, 1:].astype(int).tolist()
         if delay < 5:
             m = cost_thresholds[0] / delay_thresholds[0]
             n = cost_thresholds[0] - m * delay_thresholds[0]
@@ -139,14 +142,48 @@ class Flight:
 
         return m * delay + n
 
-    def compute_costs(self, delay: int) -> float:
-        ground_no_reac = pd.read_csv("../Data/Ground without reactionary costs.csv")
-        ground_reac = pd.read_csv("../Data/Ground with reactionary costs.csv")
+    def compute_costs(self, delay: int, air_costs: pd.DataFrame, ground_no_reac_costs: pd.DataFrame, ground_costs: pd.DataFrame, flights: pd.DataFrame) -> float:
         costs = None
         if self.delay_type == "Air":
-            costs = pd.read_csv("../Data/AirCosts.csv")
+            costs = air_costs
         elif self.delay_type == "Ground":
-            ... #TODO reactionary condition
+            matching_reg = flights[flights['RM'] == self.registration]
+            filtered_reg = matching_reg[matching_reg['ARCID'] != self.callsign]
+            if filtered_reg.empty:
+                costs = ground_no_reac_costs
+            else:
+                flight_etd = filtered_reg["ETD"].to_string(index=False)
+                flight_etd = flight_etd.split("\n")
+                etd_time = None
+                for flight in flight_etd:
+                    time_obj = datetime.strptime(flight.strip(), "%H:%M:%S").time()
+                    if time_obj > self.arr_time.time():
+                        etd_time = time_obj
+                        break
+
+                if etd_time is None:
+                    costs = ground_no_reac_costs
+                else:
+                    def time_to_minutes(t):
+                        return t.hour * 60 + t.minute + t.second / 60
+
+                    dep_minutes = time_to_minutes(self.dep_time.time())
+                    etd_minutes = time_to_minutes(etd_time)
+
+                    match self.cat:
+                        case "A" | "B":
+                            if dep_minutes + delay > etd_minutes - 134:
+                                costs = ground_costs
+                            else:
+                                costs = ground_no_reac_costs
+                        case "C" | "D" | "E" | "F":
+                            if dep_minutes + delay > etd_minutes - 59:
+                                costs = ground_costs
+                            else:
+                                costs = ground_no_reac_costs
+                        case _:
+                            print(self.cat)
+                            raise ValueError("Invalid Category")
 
         return self.cost_number(costs, delay)
 
