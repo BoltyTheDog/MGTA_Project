@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 import emissions_fuel_model as e
 import pandas as pd
 
+
+# DEFINITION OF THE CLASS FLIGHT CONTAINING ALL THE DATA INFORMATION FROM THE EXCELL OF THE STARTING POINT OF THE PROJECT.
 class Flight:
     def __init__(self, callsign: str, airplane_model: str, departure_airport: str, arrival_airport: str,
                  crz_fl: int, crz_spd: float, departure_time: datetime, taxi_time: timedelta,
@@ -43,6 +45,8 @@ class Flight:
                 f"Is Exempt: {self.is_exempt}\n"
                 f"Delay Type: {self.delay_type}\n")
 
+
+    #FUNCTION THAT COMPUTES THE UNRECOVERABLE DELAY OF AN AIRCRAFT RECIEVING THE DELAY OF THE FLIGHT AND THE TIME THE REGULATION STARTS AS INPUTS.
     def computeunrecdel(self, delay: int, hstart: int) -> float:
 
         unrecoverabledelay: float = 0
@@ -60,25 +64,27 @@ class Flight:
         return unrecoverabledelay
 
 
+    #FUNCTION TO COMPUTE THE AIR DELAY EMISSIONS USING THE GIVEN FUNCTION BY THE TEACHER.
     def compute_air_del_emissions(self, delay: int, objective: str) -> float: #return kg CO2/min in air delay flights (exempt flights)
 
         seats = self.seats
         velocity = self.cruise_spd
         distance = 0
-        if objective == "delay":
+        if objective == "delay": #WE WANT TO COMPUTE THE CO2 OF ONLY THE DELAY DISTANCE
             distance = self.cruise_spd*delay
-        if objective == "flight":
+        if objective == "flight": #WE WANT TO COMPUTE THE CO2 OF ONLY THE FLIGHT DISTANCE (WITHOUD DELAY)
             distance = self.flight_distance
-        if objective == "total":
+        if objective == "total": #WE WANT TO COMPUTE THE CO2 OF THE WHOLE FLIGHT (FLIGHT DISTANCE + DELAY)
             distance = self.cruise_spd*delay + self.flight_distance
 
-        if seats < 50:
+        #WE SET SOME FIX VALUES TO THOSE AIRCRAFT THAT DO NOT FOLLOW THE RESTRICTIONS OF THE FUNCTION GIVEN BY THE TEACHER
+        if seats < 50: #minimum available seats for the function are 50.
             seats = 50
-        elif seats > 365:
+        elif seats > 365: #maximum available seats for the function are 365
             seats = 365
-        if distance < 100:
+        if distance < 100: #minimum distance should be 100km
             distance = 100
-        elif distance > 12000:
+        elif distance > 12000: #maximum distance should be 12000km
             distance = 12000
 
 
@@ -86,27 +92,30 @@ class Flight:
         # Use force=True to bypass strict validation for edge cases
         co2_ask = e.compute_co2_ask(distance, seats, force=True)
 
+        #we first have the value of the function in gCO2/ASK so we transform it into kgC02/min
         total_co2 = co2_ask * seats * velocity * (1/1000) * 60 *(1/1000)
         return total_co2
 
+
+    #COMPUTATION OF GROUND DELAY EMISSIONS PER CATEGORY OF AIRCRAFT
     def compute_ground_del_emissions(self) -> float: #return kg CO2/min in air delay flights (exempt flights)
         fuel_consum = 0
-        match self.cat:
+        match self.cat: #depending on the category of the aircraft, when at APU consumes X amount of fuel by hour so dividing by 60 we get kg fuel/min
             case "A":
-                fuel_consum = 0
+                fuel_consum = (260/60) #High aircrafts consumes the most
             case "B":
-                fuel_consum = (50/60)
+                fuel_consum = (1700/60)
             case "C":
-                fuel_consum = (75/60)
-            case "D":
                 fuel_consum = (110/60)
+            case "D":
+                fuel_consum = (75/60)
             case "E":
-                fuel_consum = (170/60)
+                fuel_consum = (50/60)
             case "F":
-                fuel_consum = (260/60)
+                fuel_consum = 0 #Light aircrafts consumes almost nothing, so we consider it null.
             case _:
                 raise ValueError("Invalid Category")
-        return fuel_consum * 3.16
+        return fuel_consum * 3.16 #multiplying by a factor indicating that 1 kg of fuel = 3.6 kg of C02
 
     def cost_number(self, costs: pd.DataFrame, delay: int) -> float:
         if costs.empty:
