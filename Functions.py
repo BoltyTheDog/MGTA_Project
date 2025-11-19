@@ -1,10 +1,16 @@
 from typing import Literal
 
-import matplotlib.pyplot as plt
-from datetime import datetime,timedelta
-from Classes.Flight import Flight
-import numpy as np
+import matplotlib.pyplot as plt  # import for plots
+from datetime import datetime,timedelta  # import for 'timedeltas' (OPERATIONS WITH DATETIME OBJECTS)
+
+import pandas as pd  # import of the panda dictionary GHP FUNCTION
+
+from Classes.Flight import Flight  # import of the CLASS FLIGHT and its attributes
+
 from collections import Counter
+
+# imports for linear programming GHP algorithm WP3 (and numpy also for other matters as plots...)
+import numpy as np
 from scipy.optimize import linprog
 
 
@@ -68,18 +74,16 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
                     line_array[0], line_array[1], line_array[2], line_array[3],
                     int(line_array[5]), float(line_array[16]), dep_time, taxi_time,
                     arr_time, flight_duration, float(line_array[17]), line_array[11], int(line_array[12]),
-                    is_ecac
+                    line_array[4], is_ecac
                 ))
 
     return flights if flights else None
-
-#def exempt_flights(flights: list[Flight]) -> list[Flight]:
 
 
 def amount_flights_by_hour(flights: list[Flight], airline: str, hour1: int, hour2: int) -> int:
     counter = 0
     for f in flights:
-        if f.callsign.startswith(airline) and hour1 <= f.arr_time.hour <= hour2:
+        if f.callsign.startswith(airline) and hour1 <= f.arr_time.hour < hour2:
             counter += 1
     return counter
 
@@ -935,6 +939,11 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
     cost_arr = np.ones(index_count)
 
     index = 0
+    air_costs = pd.read_csv("Data/AirCosts.csv")
+    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")
+    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")
+    flight_data = pd.read_csv("Data/LEBL_10AUG2025_ECAC.csv", delimiter=";", encoding='latin-1')
+
     for i in range(flight_no):
         flight = flights[i]  # Get the current flight
         original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute
@@ -956,7 +965,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
                     r_f[index] = delay * emissions
 
                 case "costs":
-                    cost = flight.compute_costs(delay)
+                    cost = flight.compute_costs(delay, air_costs, ground_no_reac_costs, ground_costs, flight_data)
                     r_f[index] = cost
 
                 case "delay":  # Default case
@@ -970,7 +979,6 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
 
 
 
-#TODO cost function
 def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
@@ -1067,43 +1075,47 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
     return filtered_arrivals
 
 
+# FUNCTION THAT COMPUTE THE RAIL EMISSIONS OF THE FLIGHTS THAT COULD yes BE REPLACED BY A LESS THAN 6 HOUR DIRECT TRAIN ROUTE FROM BCN
 def compute_Rail_Emissions_D2DTime(filtered_arrivals: list['Flight']):
-    airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
-    rail_trips = [f for f in filtered_arrivals if f.departure_airport in airports]
-    rail_trip_time = [38, 99, 310, 376, 396]
-    rail_emissions = [2.9, 17.4, 7.2, 31.8, 32.5]
+    airports = ["LEMD", "LFML", "LEZL", "LEMG", "LFLL", "LEAL"] #LIST OF ARIPORTS OF CITIES THAT HAVE A POSSIBLE DIRECT TRAIN ROUTE FROM BARCELONA.
+
+    rail_trips = [f for f in filtered_arrivals if f.departure_airport in airports] #OBTAIN NEW FLIGHT LIST WITHOUT FLIGHTS THAT COULD BE DONE BY TRAIN
+
+    rail_trip_time = [99, 310, 376, 396, 301, 344] #We later sum 60' for the D2D time
+    rail_emissions = [17.4, 7.2, 31.8, 32.5, 7.9, 15.5] #emissions in [kg CO2/train journey].
 
     total_rail_emissions = 0
     D2D_rail_time = 0
 
-    for f in rail_trips:
+    for f in rail_trips: #loop inside the replaceable flights to search the duration of the journey by train and its emissions.
         for i in range(len(airports)):
             if f.departure_airport == airports[i]:
-                total_rail_emissions += rail_emissions[i]
-                D2D_rail_time += (rail_trip_time[i] + 60)
+                total_rail_emissions += rail_emissions[i] # look for the emissions that correspond to the route and add it to the global computation
+                D2D_rail_time += (rail_trip_time[i] + 60) # look for the time that correspond to the route and add it to the total.
     return rail_trips, total_rail_emissions, D2D_rail_time
 
+# FUNCTION THAT COMPUTE THE RAIL EMISSIONS OF THE FLIGHTS THAT COULD not BE REPLACED BY A LESS THAN 6 HOUR DIRECT TRAIN ROUTE FROM BCN
 def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight'], delay: int):
-    airports = ["LEMD", "LFML", "LEZL", "LEMG"]
-    flight_trips = [f for f in filtered_arrivals if f.departure_airport in airports]
-    flight_trip_time = [164, 153, 178, 181]
-    flight_emissions = [115.41, 128.39, 146.94, 139.54]
+    airports = ["LEMD", "LFML", "LEZL", "LEMG", "LFLL", "LEAL"]
+    flight_trips = [f for f in filtered_arrivals if f.departure_airport not in airports] #LIST OF ARIPORTS OF CITIES THAT do not HAVE A POSSIBLE DIRECT TRAIN ROUTE FROM BARCELONA.
+    flight_trip_time = [164, 153, 178, 181, 183, 161] #We later sum 150' for the D2D time
+    flight_emissions = [115.41, 128.39, 146.94, 139.54, 116.27, 101.1] #emissions in [kg CO2/flight journey].
 
     total_flight_emissions = 0
     D2D_aircraft_time = 0
 
-    for f in flight_trips:
+    for f in flight_trips: #loop inside the replaceable flights to search the duration of the journey by train and its emissions.
         for i in range(len(airports)):
             if f.departure_airport == airports[i]:
-                total_flight_emissions += flight_emissions[i]
-                D2D_aircraft_time += (flight_trip_time[i] + 150 + delay)
+                total_flight_emissions += flight_emissions[i] # look for the emissions that correspond to the route and add it to the global computation
+                D2D_aircraft_time += (flight_trip_time[i] + 150 + delay) # look for the time that correspond to the route and add it to the total.
     return flight_trips, total_flight_emissions, D2D_aircraft_time
 
 def plot_train_vs_flight_emissions_times():
     # Datos base
     airports = ["LEGE", "LEMD", "LFML", "LEZL", "LEMG"]
     rail_emissions = [2.9, 17.4, 7.2, 31.8, 32.5]
-    flight_emissions = [115.41, 128.39, 146.94, 139.54]
+    flight_emissions = [..., 115.41, 128.39, 146.94, 139.54]
     rail_time = [38 + 60, 99 + 60, 310 + 60, 376 + 60, 396 + 60]
     flight_time = [150, 164 + 150, 153 + 150, 178 + 150, 181 + 150]
 
@@ -1133,11 +1145,6 @@ def plot_train_vs_flight_emissions_times():
 
     plt.tight_layout()
     plt.show()
-
-
-
-
-
 
 
 
@@ -1416,7 +1423,6 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     reduced_capacity: int - Reduced capacity during regulation
     max_capacity: int - Maximum capacity
     """
-    from mpl_toolkits.mplot3d import Axes3D
     import sys
     import io
     

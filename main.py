@@ -1,5 +1,4 @@
 import Functions as f
-import emissions_fuel_model as e
 max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
 HStart: int = 11 # Regulation start hour
@@ -85,7 +84,7 @@ for i, flight in enumerate(sorted_flights, 1):
     print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
     if flight.delay_type == "Air":
-        air_emission = flight.compute_air_del_emissions(delay, objective='delay')
+        air_emission = flight.compute_air_del_emissions(delay, "delay"delay, objective='delay')
         air_del_emission_count += air_emission
         rf_GDP.append(air_emission)
     if flight.delay_type == "Ground":
@@ -103,12 +102,12 @@ print(f"Unrecoverable delay = {unrecoverabledelay} mins")
 print("="*80)
 print(f"# of flights with 15+ minutes of delay: {otpcounter}")
 print("="*80)
-print("Total of emissions/min from air delay: ", air_del_emission_count)
-print("Total of emissions/min from ground delay: ", ground_del_emission_count)
+print("Total of emissions/min from air delay:", air_del_emission_count, "kg of CO2")
+print("Total of emissions/min from ground delay:", ground_del_emission_count, "kg of CO2")
 
 
 # (unitary cost => rf = 1) -> total cost = total delay
-f.compute_GHP(filtered_flights, slots, objective='emissions')
+f.compute_GHP(filtered_flights, slots, objective='costs')
 '''
 # minimizar emisiones
 slotted_arrivals_cost, totalcost2 = f.compute_GHP(filtered_flights, slots, rf_vector=rf, objective='emissions')
