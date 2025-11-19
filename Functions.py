@@ -1,13 +1,16 @@
 from typing import Literal
 
-import matplotlib.pyplot as plt
-from datetime import datetime,timedelta
+import matplotlib.pyplot as plt  # import for plots
+from datetime import datetime,timedelta  # import for 'timedeltas' (OPERATIONS WITH DATETIME OBJECTS)
 
-import pandas as pd
+import pandas as pd  # import of the panda dictionary GHP FUNCTION
 
-from Classes.Flight import Flight
-import numpy as np
+from Classes.Flight import Flight  # import of the CLASS FLIGHT and its attributes
+
 from collections import Counter
+
+# imports for linear programming GHP algorithm WP3 (and numpy also for other matters as plots...)
+import numpy as np
 from scipy.optimize import linprog
 
 
