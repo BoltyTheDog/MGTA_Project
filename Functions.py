@@ -158,7 +158,8 @@ def plot_slotted_arrivals(slotted_flights: list[Flight], max_capacity: int, regh
     plt.hlines(y=(max_capacity / 2), xmin=reghstart, xmax=reghend, colors="red", linewidth=2, label=f"Reduced capacity ({max_capacity // 2})")
     plt.hlines(y=max_capacity, xmin=reghend, xmax=24, colors="green", linewidth=2)
     
-    plt.legend()
+    # Place legend at 60% horizontal and 30% vertical of the chart
+    plt.legend(loc='upper left', bbox_to_anchor=(0.45, 0.3))
     plt.grid(True, alpha=0.3)
     plt.show()
     
@@ -488,6 +489,18 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
         if flight.delay_type == "None":
             flight.assigned_slot_time = flight.original_eta_minutes
             flight.assigned_delay = 0
+
+    # Determine per-hour available slot counts from slots (to enforce capacity)
+    # hour -> number of slots available in that hour
+    slot_hours = [int(s[0]) // 60 for s in available_slots]
+    slot_count_by_hour = Counter(slot_hours)
+    # Track assigned count per hour while assigning
+    assigned_count_by_hour: dict[int, int] = {}
+    # Pre-count flights that keep original schedule (delay_type == 'None') as occupying their hour
+    for f in slotted_arrivals:
+        if f.delay_type == 'None' and f.assigned_slot_time is not None:
+            h = int(f.assigned_slot_time) // 60
+            assigned_count_by_hour[h] = assigned_count_by_hour.get(h, 0) + 1
     
     # Sort only the flights that need slots by original ETA for sequential assignment
     flights_needing_slots.sort(key=lambda f: f.original_eta_minutes)
@@ -509,7 +522,12 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
         for i, slot in enumerate(available_slots):
             slot_time = slot[0]  # slot time in minutes
             flight_id = slot[1]  # 0 means available
-            
+            slot_hour = int(slot_time) // 60
+
+            # Check per-hour capacity: don't assign if this hour is already full
+            if assigned_count_by_hour.get(slot_hour, 0) >= slot_count_by_hour.get(slot_hour, 0):
+                continue
+
             # Check if slot is available and not before original ETA
             if flight_id == 0 and slot_time >= original_eta:
                 # Assign the flight to this slot
@@ -520,6 +538,9 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
                 delay_minutes = slot_time - original_eta
                 flight.assigned_slot_time = slot_time
                 flight.assigned_delay = delay_minutes
+                # increment assigned count for the hour
+                assigned_count_by_hour[slot_hour] = assigned_count_by_hour.get(slot_hour, 0) + 1
+                flight.assigned_slot_index = i
                 
                 # Assign delay type based on exemption status
                 if is_exempt:
@@ -568,8 +589,251 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     print(f"  Total ground delay: {total_ground_delay} minutes")
     print(f"  Average air delay: {total_air_delay/len(exempt_flights_needing_slots):.1f} minutes" if exempt_flights_needing_slots else "  No exempt flights needing slots")
     print(f"  Average ground delay: {total_ground_delay/len(controlled_flights_needing_slots):.1f} minutes" if controlled_flights_needing_slots else "  No controlled flights needing slots")
+    # Compute standard deviation and relative standard deviation (RSD)
+    # Use sample standard deviation (ddof=1) when there are >=2 samples, otherwise std = 0
+    air_delays_list = [flight.assigned_delay for flight in exempt_flights_needing_slots if hasattr(flight, 'assigned_delay')]
+    ground_delays_list = [flight.assigned_delay for flight in controlled_flights_needing_slots if hasattr(flight, 'assigned_delay')]
+
+    def stats_with_rsd(values: list[int]) -> tuple[float, float, float]:
+        """Return (count, std, rsd_percent). std uses sample std when possible."""
+        if not values:
+            return 0.0, 0.0, 0.0
+        arr = np.array(values, dtype=float)
+        count = len(arr)
+        mean = arr.mean()
+        std = float(np.std(arr, ddof=1)) if count > 1 else 0.0
+        rsd = (std / mean * 100.0) if mean != 0 else 0.0
+        return count, std, rsd
+
+    air_count, air_std, air_rsd = stats_with_rsd(air_delays_list)
+    ground_count, ground_std, ground_rsd = stats_with_rsd(ground_delays_list)
+
+    if air_count:
+        print(f"  Air delays: N={air_count}, Std={air_std:.1f} min, RSD={air_rsd:.1f}%")
+    if ground_count:
+        print(f"  Ground delays: N={ground_count}, Std={ground_std:.1f} min, RSD={ground_rsd:.1f}%")
+
     
     return slotted_arrivals
+
+
+def enforce_capacity(slots: np.ndarray, slotted_arrivals: list[Flight], HStart: int, HEnd: int,
+                     reduced_capacity: int, max_capacity: int) -> None:
+    """
+    Ensure assigned slots per hour do not exceed allowed capacity.
+    If an hour is over capacity, move flights (largest delays first) to the next
+    available slots after their original ETA. This modifies `slots` and
+    `slotted_arrivals` in-place.
+    """
+    # Build allowed capacity map per hour
+    allowed = {}
+    for h in range(0, 24):
+        if HStart <= h < HEnd:
+            allowed[h] = reduced_capacity
+        else:
+            allowed[h] = max_capacity
+
+    # Map hour -> list of flights assigned in that hour
+    hour_map = {}
+    for f in slotted_arrivals:
+        if getattr(f, 'assigned_slot_time', None) is None:
+            continue
+        h = int(f.assigned_slot_time // 60)
+        hour_map.setdefault(h, []).append(f)
+
+    moved = 0
+    # Iterate hours in regulation window first, then others
+    hours_to_check = sorted(hour_map.keys())
+    for h in hours_to_check:
+        current = hour_map.get(h, [])
+        cap = allowed.get(h, max_capacity)
+        if len(current) <= cap:
+            continue
+        excess = len(current) - cap
+        # Sort flights by assigned_delay descending (move largest delays first)
+        candidates = sorted(current, key=lambda x: getattr(x, 'assigned_delay', 0), reverse=True)
+        for f in candidates:
+            if excess <= 0:
+                break
+            cur_idx = getattr(f, 'assigned_slot_index', None)
+            original_eta = f.arr_time.hour * 60 + f.arr_time.minute
+            # Search for next available slot with time >= original_eta
+            found = False
+            for i in range(cur_idx + 1 if cur_idx is not None else 0, len(slots)):
+                if slots[i][1] == 0 and slots[i][0] >= original_eta:
+                    # Free old slot
+                    if cur_idx is not None and 0 <= cur_idx < len(slots):
+                        slots[cur_idx][1] = 0
+                        slots[cur_idx][2] = 0
+                        slots[cur_idx][3] = 0
+                        slots[cur_idx][4] = 0
+                    # Assign new slot
+                    slots[i][1] = hash(f.callsign) % 10000
+                    slots[i][2] = hash(f.callsign[:3]) % 1000
+                    delay_minutes = slots[i][0] - original_eta
+                    f.assigned_slot_time = int(slots[i][0])
+                    f.assigned_slot_index = i
+                    f.assigned_delay = int(delay_minutes)
+                    if getattr(f, 'is_exempt', False):
+                        slots[i][3] = int(delay_minutes)
+                        slots[i][4] = 0
+                    else:
+                        slots[i][3] = 0
+                        slots[i][4] = int(delay_minutes)
+                    moved += 1
+                    excess -= 1
+                    found = True
+                    break
+            if not found:
+                # couldn't move this flight — try next candidate
+                continue
+
+    if moved:
+        print(f"Enforce capacity: moved {moved} flights to respect hourly capacity limits")
+    else:
+        print("Enforce capacity: no moves required; hourly capacity respected")
+
+
+def cancel_and_reslot(slotted_arrivals: list[Flight], slots: np.ndarray, company: str = 'VLG', n_cancel: int = 10) -> list[Flight]:
+    """
+    Cancel top-n highest-delay flights from `company`, then re-run slot assignment giving priority
+    to flights from that company to fill the freed slots. Returns the new slotted_arrivals list.
+
+    Behaviour: after cancellation we rebuild available slots (clearing assignments) and
+    reassign all flights that require slots (delay_type in (Air, Ground)), prioritizing
+    flights whose callsign starts with `company`.
+
+    Returns: new_slotted_arrivals (list[Flight]) with updated assigned_slot_time/assigned_delay
+    """
+
+    # Compute metrics helper
+    def compute_delay_metrics(flights: list[Flight]):
+        air = [getattr(f, 'assigned_delay', 0) for f in flights if f.delay_type == 'Air' and getattr(f, 'assigned_slot_time', None) is not None]
+        ground = [getattr(f, 'assigned_delay', 0) for f in flights if f.delay_type == 'Ground' and getattr(f, 'assigned_slot_time', None) is not None]
+        def summ(v):
+            arr = np.array(v, dtype=float) if v else np.array([], dtype=float)
+            return {
+                'count': len(arr),
+                'total': float(arr.sum()) if arr.size else 0.0,
+                'mean': float(arr.mean()) if arr.size else 0.0,
+                'std': float(arr.std(ddof=1)) if arr.size>1 else 0.0
+            }
+        return {'air': summ(air), 'ground': summ(ground)}
+
+    # Snapshot metrics before
+    before_metrics = compute_delay_metrics(slotted_arrivals)
+
+    # Identify company flights with assigned delays
+    company_flights = [f for f in slotted_arrivals if f.callsign.startswith(company) and getattr(f, 'assigned_slot_time', None) is not None]
+    # Sort by assigned_delay descending and pick top n_cancel
+    company_flights_sorted = sorted(company_flights, key=lambda f: getattr(f, 'assigned_delay', 0), reverse=True)
+    to_cancel = company_flights_sorted[:n_cancel]
+
+    print(f"Cancelling up to {n_cancel} flights from {company} (found {len(to_cancel)})")
+
+    # Mark cancellations and free their slots
+    for f in to_cancel:
+        idx = getattr(f, 'assigned_slot_index', None)
+        if idx is not None and 0 <= idx < len(slots):
+            slots[idx][1] = 0
+            slots[idx][2] = 0
+            slots[idx][3] = 0
+            slots[idx][4] = 0
+        f.assigned_slot_time = None
+        f.assigned_slot_index = None
+        f.assigned_delay = 0
+        f.is_cancelled = True
+
+    # Prepare list of flights to reassign: all flights that need slots and are not cancelled
+    flights_to_slot = [f for f in slotted_arrivals if f.delay_type in ("Air", "Ground") and not getattr(f, 'is_cancelled', False)]
+
+    # Clear any previous assignment markers in slots to rebuild
+    for i in range(len(slots)):
+        slots[i][1] = 0
+        slots[i][2] = 0
+        slots[i][3] = 0
+        slots[i][4] = 0
+
+    # Ensure flights that had delay_type == 'None' keep their original ETA assigned
+    for f in slotted_arrivals:
+        if f.delay_type == 'None':
+            f.assigned_slot_time = f.arr_time.hour * 60 + f.arr_time.minute
+            f.assigned_delay = 0
+
+    # Determine per-hour available slot counts from slots (to enforce capacity during re-assignment)
+    slot_hours = [int(s[0]) // 60 for s in slots]
+    slot_count_by_hour = Counter(slot_hours)
+    assigned_count_by_hour: dict[int, int] = {}
+    # Pre-count flights that keep original schedule (delay_type == 'None') as occupying their hour
+    for f in slotted_arrivals:
+        if f.delay_type == 'None' and getattr(f, 'assigned_slot_time', None) is not None:
+            h = int(f.assigned_slot_time) // 60
+            assigned_count_by_hour[h] = assigned_count_by_hour.get(h, 0) + 1
+
+    # Prioritize company flights first, then others. Within groups, sort by original ETA ascending
+    def orig_eta(f):
+        return f.arr_time.hour * 60 + f.arr_time.minute
+
+    priority_group = [f for f in flights_to_slot if f.callsign.startswith(company)]
+    other_group = [f for f in flights_to_slot if not f.callsign.startswith(company)]
+    priority_group.sort(key=orig_eta)
+    other_group.sort(key=orig_eta)
+    new_queue = priority_group + other_group
+
+    # Reassign: reuse assign_flight_to_slot logic (inline minimal implementation)
+    for f in new_queue:
+        original_eta = f.arr_time.hour * 60 + f.arr_time.minute
+        assigned = False
+        for i, slot in enumerate(slots):
+            slot_time = slot[0]
+            slot_hour = int(slot_time) // 60
+
+            # Enforce per-hour capacity: skip this slot if the hour is already full
+            if assigned_count_by_hour.get(slot_hour, 0) >= slot_count_by_hour.get(slot_hour, 0):
+                continue
+
+            if slot[1] == 0 and slot_time >= original_eta:
+                slots[i][1] = hash(f.callsign) % 10000
+                slots[i][2] = hash(f.callsign[:3]) % 1000
+                delay_minutes = slot_time - original_eta
+                f.assigned_slot_time = slot_time
+                f.assigned_slot_index = i
+                f.assigned_delay = delay_minutes
+                # increment assigned count for that hour
+                assigned_count_by_hour[slot_hour] = assigned_count_by_hour.get(slot_hour, 0) + 1
+                if getattr(f, 'is_exempt', False):
+                    slots[i][3] = delay_minutes
+                    slots[i][4] = 0
+                else:
+                    slots[i][3] = 0
+                    slots[i][4] = delay_minutes
+                assigned = True
+                break
+        if not assigned:
+            # Couldn't find suitable slot respecting hourly capacity; leave unassigned
+            f.assigned_slot_time = None
+            f.assigned_slot_index = None
+            f.assigned_delay = 0
+
+    # Compute after metrics
+    after_metrics = compute_delay_metrics(slotted_arrivals)
+
+    # Print comparison
+    def print_metric_comp(name, before, after):
+        print(f"{name} - Before: total={before['total']:.1f} min, mean={before['mean']:.1f} min, N={before['count']}; After: total={after['total']:.1f} min, mean={after['mean']:.1f} min, N={after['count']}")
+
+    print("\nMETRICS COMPARISON (Before vs After cancellations):")
+    print_metric_comp('Air delay', before_metrics['air'], after_metrics['air'])
+    print_metric_comp('Ground delay', before_metrics['ground'], after_metrics['ground'])
+
+    # Remove cancelled flights from the returned list so callers treat them as deleted
+    cancelled_count = sum(1 for f in slotted_arrivals if getattr(f, 'is_cancelled', False))
+    if cancelled_count:
+        print(f"Cancelled {cancelled_count} flights from {company} and removed them from the flight list")
+
+    new_slotted_arrivals = [f for f in slotted_arrivals if not getattr(f, 'is_cancelled', False)]
+
+    return new_slotted_arrivals
 
 
 def print_delay_statistics(slotted_flights: list[Flight]) -> None:
@@ -891,9 +1155,10 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
     max_capacity: int - Maximum capacity
     """
     
-    # HFile values from 6h to 11h in 10-minute increments
+    # HFile values from 6h up to (but not including) 11h in 10-minute increments
+    # Stop before regulation start at 11:00 so HFile < HStart
     hfile_values = []
-    for hour in range(6, 12):  # 6 to 11 hours
+    for hour in range(6, 11):  # 6 to 10 hours (last HFile = 10:50)
         for minute in [0, 10, 20, 30, 40, 50]:
             hfile_values.append(hour + minute/60)
     
@@ -1069,7 +1334,7 @@ def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, 
             # Calculate delays and emissions by type
             if delay_type == "Air":
                 total_air_delay += delay
-                air_emissions += flight.compute_air_del_emissions()
+                air_emissions += flight.compute_air_del_emissions(delay, "delay")
             elif delay_type == "Ground":
                 total_ground_delay += delay
                 if delay > 60:
@@ -1160,8 +1425,10 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     print("="*80)
     
     # Define ranges
+    # HFile values from 6h up to (but not including) 11h in 10-minute increments
+    # Stop before regulation start at 11:00 so HFile < HStart
     hfile_values = []
-    for hour in range(6, 12):  # 6 to 11 hours
+    for hour in range(6, 11):  # 6 to 10 hours (last HFile = 10:50)
         for minute in [0, 10, 20, 30, 40, 50]:
             hfile_values.append(hour + minute/60)
     
@@ -1231,7 +1498,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
                 # Calculate delays and emissions by type
                 if delay_type == "Air":
                     total_air_delay += delay
-                    air_emissions += flight.compute_air_del_emissions()
+                    air_emissions += flight.compute_air_del_emissions(delay, "delay")
                 elif delay_type == "Ground":
                     if delay > 60:
                         ground_emissions += flight.compute_ground_del_emissions() / 9
@@ -1253,7 +1520,12 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     # Create figure with 2x2 subplots
     fig = plt.figure(figsize=(20, 16))
     
-    # 1. 3D Surface: Unrecoverable Delay
+    # Normalize each metric to 0-1 before plotting the surfaces (preserve values for weighted combination)
+    norm_unrec = (unrecoverable_delays - unrecoverable_delays.min()) / (unrecoverable_delays.max() - unrecoverable_delays.min() + 1e-10)
+    norm_air = (air_delays - air_delays.min()) / (air_delays.max() - air_delays.min() + 1e-10)
+    norm_emissions = (total_emissions - total_emissions.min()) / (total_emissions.max() - total_emissions.min() + 1e-10)
+
+    # 1. 3D Surface: Unrecoverable Delay (raw values)
     ax1 = fig.add_subplot(2, 2, 1, projection='3d')
     surf1 = ax1.plot_surface(X, Y, unrecoverable_delays, cmap='viridis', alpha=0.9, edgecolor='none')
     ax1.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
@@ -1261,8 +1533,8 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     ax1.set_zlabel('Unrecoverable Delay (min)', fontsize=10, fontweight='bold')
     ax1.set_title('Unrecoverable Delay vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
     fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5)
-    
-    # 2. 3D Surface: Air Delay
+
+    # 2. 3D Surface: Air Delay (raw values)
     ax2 = fig.add_subplot(2, 2, 2, projection='3d')
     surf2 = ax2.plot_surface(X, Y, air_delays, cmap='plasma', alpha=0.9, edgecolor='none')
     ax2.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
@@ -1270,8 +1542,8 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     ax2.set_zlabel('Air Delay (min)', fontsize=10, fontweight='bold')
     ax2.set_title('Air Delay vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
     fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5)
-    
-    # 3. 3D Surface: Total Emissions
+
+    # 3. 3D Surface: Total Emissions (raw values)
     ax3 = fig.add_subplot(2, 2, 3, projection='3d')
     surf3 = ax3.plot_surface(X, Y, total_emissions, cmap='inferno', alpha=0.9, edgecolor='none')
     ax3.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')

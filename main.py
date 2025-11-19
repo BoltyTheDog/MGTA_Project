@@ -32,8 +32,20 @@ slots = f.compute_slots(Hstart_min, Hend_min, extended_HNoReg, reduced_capacity,
 
 slotted_arrivals = f.assignSlotsGDP(filtered_flights, slots)
 
+# Enforce capacity after initial assignment (may move flights to keep hourly capacity)
+f.enforce_capacity(slots, slotted_arrivals, HStart, HEnd, reduced_capacity, max_capacity)
 f.plot_slotted_arrivals(slotted_arrivals, max_capacity, HStart, HEnd)
 
+f.print_delay_statistics(slotted_arrivals)
+
+# Cancel top-10 VLG flights and re-run slotting prioritizing VLG; print comparison
+print("\nApplying cancellations (top-10 VLG delays) and re-slotting with VLG priority...")
+slotted_arrivals = f.cancel_and_reslot(slotted_arrivals, slots, company='VLG', n_cancel=10)
+
+# Plot and print statistics after reslotting
+# Enforce capacity again after the reslot operation to ensure no hour exceeds limits
+f.enforce_capacity(slots, slotted_arrivals, HStart, HEnd, reduced_capacity, max_capacity)
+f.plot_slotted_arrivals(slotted_arrivals, max_capacity, HStart, HEnd)
 f.print_delay_statistics(slotted_arrivals)
 
 # Print basic slot assignments for all arrivals
@@ -43,8 +55,8 @@ print("="*80)
 print(f"{'#':<4} {'Callsign':<8} {'Original ETA':<12} {'Assigned Slot':<13} {'Delay (min)':<11} {'Type':<6} {'Exempt':<6}")
 print("-" * 80)
 
-# Sort flights by original ETA for display
-sorted_flights = sorted(slotted_arrivals, key=lambda f: f.assigned_slot_time) #f.arr_time
+# Sort flights by assigned slot time for display; place unassigned flights at the end
+sorted_flights = sorted(slotted_arrivals, key=lambda fl: (fl.assigned_slot_time is None, fl.assigned_slot_time if fl.assigned_slot_time is not None else 10**9))
 unrecoverabledelay: float = 0
 otpcounter: int = 0
 
@@ -73,7 +85,7 @@ for i, flight in enumerate(sorted_flights, 1):
     print(f"{i:<4} {flight.callsign:<8} {original_eta:<12} {assigned_slot:<13} {delay:<11} {delay_type:<6} {is_exempt}")
 
     if flight.delay_type == "Air":
-        air_emission = flight.compute_air_del_emissions()
+        air_emission = flight.compute_air_del_emissions(delay, objective='delay')
         air_del_emission_count += air_emission
         rf_GDP.append(air_emission)
     if flight.delay_type == "Ground":
