@@ -965,7 +965,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
             match objective:
                 case "emissions":  # GHP computation minimizing CO2 EMISSIONS
                     if flight.delay_type.upper() == "AIR":  # air delay
-                        emissions = flight.compute_air_del_emissions(delay, "delay")  # call compute air del emissions
+                        emissions = flight.compute_air_del_emissions(delay, "delay") * delay # call compute air del emissions
                     elif flight.delay_type.upper() == "GROUND":  # ground delay
                         emissions = flight.compute_ground_del_emissions(delay)  # call compute ground del emissions
                     else:  # non delay -> no cost associated to the delay
