@@ -100,7 +100,7 @@ class Flight:
 
 
     #COMPUTATION OF GROUND DELAY EMISSIONS PER CATEGORY OF AIRCRAFT
-    def compute_ground_del_emissions(self) -> float:  # return kg CO2/min in air delay flights (exempt flights)
+    def compute_ground_del_emissions(self, delay: int) -> float:  # return kg CO2/min in air delay flights (exempt flights)
         fuel_consum = 0
         match self.cat:  # depending on the category of the aircraft, when at APU consumes X amount of fuel by hour so dividing by 60 we get kg fuel/min
             case "A":
@@ -117,7 +117,10 @@ class Flight:
                 fuel_consum = 0
             case _:
                 raise ValueError("Invalid Category")
-        return fuel_consum * 3.16
+        emissions = fuel_consum * 3.16 * delay
+        if delay > 60:
+            emissions = (fuel_consum * 60 + (fuel_consum / 10) * (delay - 60)) * 3.16
+        return emissions
 
     def cost_number(self, costs: pd.DataFrame, delay: int) -> float:
         if costs.empty:  # panda dictionary to take the values from table
@@ -178,7 +181,7 @@ class Flight:
                     etd_minutes = time_to_minutes(etd_time)
 
                     match self.cat:  # SWITCH CASE for aircraft categories for the TURN AROUND TIME value
-
+                        # https://ansperformance.eu/economics/cba/standard-inputs/latest/chapters/turnaround_time.html
                         # higher categories => 134 min of turn around time
                         case "A" | "B":
                             if dep_minutes + delay > etd_minutes - 134:

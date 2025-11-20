@@ -67,7 +67,8 @@ def initialise_flights(filename: str) -> list['Flight'] | None:
                     hours=flight_time.hour, minutes=flight_time.minute, seconds=flight_time.second
                 )
 
-                # Determine ECAC status (column 15 in your example)
+                # Determine ECAC status
+
                 is_ecac = line_array[14].strip().upper() == "ECAC" if len(line_array) > 14 else True
 
                 flights.append(Flight(
@@ -966,10 +967,10 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
                     if flight.delay_type.upper() == "AIR":  # air delay
                         emissions = flight.compute_air_del_emissions(delay, "delay")  # call compute air del emissions
                     elif flight.delay_type.upper() == "GROUND":  # ground delay
-                        emissions = flight.compute_ground_del_emissions()  # call compute ground del emissions
+                        emissions = flight.compute_ground_del_emissions(delay)  # call compute ground del emissions
                     else:  # non delay -> no cost associated to the delay
                         emissions = 1
-                    r_f[index] = delay * emissions  # remember that the emission units are [kgCO2/min]
+                    r_f[index] = emissions
 
                 case "costs":  # GHP computation minimizing ECONOMIC COSTS for operators
                     cost = flight.compute_costs(delay, air_costs, ground_no_reac_costs, ground_costs, flight_data)  # inputs for the functions: delay and tables
@@ -989,7 +990,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
 def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
-      - filtered_arrivals: list of Flight objects (they must have .delay_type, .arr_time, .seats, etc)
+      - filtered_arrivals: list of Flight objects (they must have .delay_type, .arr_time, .seats, etc.)
       - slots: numpy array with first column slot_time (in minutes)
       - rf_vector: optional list with one rf per flight (len = number of flights needing slots).
                    If None and objective == 'emissions', rf computed from flight emissions per minute
