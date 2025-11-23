@@ -90,29 +90,28 @@ class Flight:
         elif distance > 12000: #maximum distance should be 12000km
             distance = 12000
 
-
         # Use force=True to bypass strict validation for edge cases
         co2_ask = e.compute_co2_ask(distance, seats, force=True)
 
-        #we first have the value of the function in gCO2/ASK so we transform it into kgC02/min
+        # We first have the value of the function in gCO2/ASK so we transform it into kgC02/min
         total_co2 = co2_ask * seats * velocity * (1/1000) * 60 *(1/1000)
         return total_co2
 
 
-    #COMPUTATION OF GROUND DELAY EMISSIONS PER CATEGORY OF AIRCRAFT
+    # COMPUTATION OF GROUND DELAY EMISSIONS PER CATEGORY OF AIRCRAFT
     def compute_ground_del_emissions(self, delay: int) -> float:  # return kg CO2/min in air delay flights (exempt flights)
         fuel_consum = 0
-        match self.cat:  # depending on the category of the aircraft, when at APU consumes X amount of fuel by hour so dividing by 60 we get kg fuel/min
+        match self.cat:  # depending on the category of the aircraft, when at APU consumes X amount (kg/min)
             case "A":
-                fuel_consum = (260 / 60)
+                fuel_consum = 5.5
             case "B":
-                fuel_consum = (170 / 60)
+                fuel_consum = 3.5
             case "C":
-                fuel_consum = (110 / 60)
+                fuel_consum = 2.3
             case "D":
-                fuel_consum = (75 / 60)
+                fuel_consum = 2
             case "E":
-                fuel_consum = (50 / 60)
+                fuel_consum = 0.5
             case "F":
                 fuel_consum = 0
             case _:
@@ -147,10 +146,10 @@ class Flight:
         return m * delay + n  # return of the cost (y value of our straight line equation)
 
     def compute_costs(self, delay: int, air_costs: pd.DataFrame, ground_no_reac_costs: pd.DataFrame, ground_costs: pd.DataFrame, flights: pd.DataFrame) -> float:
-        costs = None
-        if self.delay_type == "Air":  # look for if delay type is Air
+        costs = pd.DataFrame()
+        if self.delay_type == "Air" and delay < 45:  # look for if delay type is Air
             costs = air_costs  # if air delay use air delay table
-        elif self.delay_type == "Ground":  # look for if delay type is Ground
+        elif self.delay_type == "Ground" and delay < 360:  # look for if delay type is Ground
             # if ground delay look for if reactionary or not reactionary delay
             # to know if reactionary delay search if there is turn around flight
             matching_reg = flights[flights['RM'] == self.registration]  # Is there any other flight with the same RM (same plane, thus)?
@@ -181,7 +180,6 @@ class Flight:
                     etd_minutes = time_to_minutes(etd_time)
 
                     match self.cat:  # SWITCH CASE for aircraft categories for the TURN AROUND TIME value
-                        # https://ansperformance.eu/economics/cba/standard-inputs/latest/chapters/turnaround_time.html
                         # higher categories => 134 min of turn around time
                         case "A" | "B":
                             if dep_minutes + delay > etd_minutes - 134:
@@ -199,7 +197,7 @@ class Flight:
                             print(self.cat)
                             raise ValueError("Invalid Category")
 
-        return self.cost_number(costs, delay)
+        return self.cost_number(costs, delay) if not costs.empty else 10e12
 
 
 if __name__ == "__main__":
