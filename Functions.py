@@ -604,8 +604,7 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     print(f"  Total flights needing slots: {len(flights_needing_slots)}")
     print(f"  Total flights assigned: {assigned_exempt + assigned_controlled}/{len(flights_needing_slots)}")
     print(f"  Flights keeping original schedule: {len(flights_not_needing_slots)}")
-    print(f"  Total costs: ${total_costs:,.2f}")
-
+    print(f"  Total costs: {total_costs:,.2f} (2014) €")
     # Calculate delay statistics
     total_air_delay = sum(flight.assigned_delay for flight in exempt_flights_needing_slots if hasattr(flight, 'assigned_delay'))
     total_ground_delay = sum(flight.assigned_delay for flight in controlled_flights_needing_slots if hasattr(flight, 'assigned_delay'))
@@ -638,7 +637,6 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     if ground_count:
         print(f"  Ground delays: N={ground_count}, Std={ground_std:.1f} min, RSD={ground_rsd:.1f}%")
 
-    print(f" Total costs: ${total_costs:,.2f}")
 
     return slotted_arrivals
 
@@ -1123,6 +1121,7 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, hstart: int,
         total_emissions = 0
         total_costs = 0
         total_unrec_delay = 0
+        on_time_counter = 0
 
         # Lists for statistics calculation
         air_delays = []
@@ -1146,6 +1145,8 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, hstart: int,
                     slot_time = slot_times[j]
                     total_delay = max(0, slot_time - original_arrival_minutes)
                     total_unrec_delay += flight.computeunrecdel(total_delay, hstart)
+                    if total_delay >= 15:
+                        on_time_counter += 1
 
                     # Convert slot time back to time format for new arrival
                     slot_hour = slot_time // 60
@@ -1215,6 +1216,7 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, hstart: int,
         print(f"TOTAL EMISSIONS = {total_emissions} kg CO2")
         print(f"TOTAL COST = {total_costs} (2014) €")
         print(f"UNRECOVERABLE DELAY = {total_unrec_delay} min" )
+        print(f"FLIGHTS WITH >= 15 MINS DELAY: {on_time_counter}")
 
         # Calculate statistics
         def calculate_statistics(delays):
@@ -1306,13 +1308,14 @@ def compute_Rail_Emissions_D2DTime(filtered_arrivals: list['Flight']):
 def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight']):
     airports = ["LEMD", "LFML", "LEZL", "LEMG", "LFLL", "LEAL"]
     flight_trips = [f for f in filtered_arrivals if f.departure_airport not in airports] #LIST OF ARIPORTS OF CITIES THAT do not HAVE A POSSIBLE DIRECT TRAIN ROUTE FROM BARCELONA.
+    rail_trips = [f for f in filtered_arrivals if f.departure_airport in airports]
     flight_trip_time = [164, 153, 178, 181, 183, 161] #We later sum 150' for the D2D time
     flight_emissions = [115.41, 128.39, 146.94, 139.54, 116.27, 101.1] #emissions in [kg CO2/flight journey].
 
     total_flight_emissions = 0
     D2D_aircraft_time = 0
 
-    for f in flight_trips: #loop inside the replaceable flights to search the duration of the journey by train and its emissions.
+    for f in rail_trips: #loop inside the replaceable flights to search the duration of the journey by train and its emissions.
         for i in range(len(airports)):
             if f.departure_airport == airports[i]:
                 total_flight_emissions += flight_emissions[i] # look for the emissions that correspond to the route and add it to the global computation
@@ -1665,7 +1668,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     # Suppress stdout during loop to avoid clutter
     original_stdout = sys.stdout
     
-    for i, HFile in tqdm(enumerate(hfile_values), desc="Plotting 3d analysis"):
+    for i, HFile in enumerate(hfile_values):
         for j, distThreshold in enumerate(dist_threshold_values):
             iteration += 1
             

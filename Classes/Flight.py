@@ -88,16 +88,17 @@ class Flight:
 
     #FUNCTION TO COMPUTE THE AIR DELAY EMISSIONS USING THE GIVEN FUNCTION BY THE TEACHER.
     def compute_air_del_emissions(self, delay: int, objective = Literal["delay", "flight", "total"]) -> float: #return kg CO2/min in air delay flights (exempt flights)
-
+        if delay > 45:
+            return 1e15
         seats = self.seats
         velocity = self.cruise_spd
         distance = 0
         if objective == "delay": #WE WANT TO COMPUTE THE CO2 OF ONLY THE DELAY DISTANCE
-            distance = self.cruise_spd*delay
-        if objective == "flight": #WE WANT TO COMPUTE THE CO2 OF ONLY THE FLIGHT DISTANCE (WITHOUD DELAY)
+            distance = self.cruise_spd * delay
+        elif objective == "flight": #WE WANT TO COMPUTE THE CO2 OF ONLY THE FLIGHT DISTANCE (WITHOUD DELAY)
             distance = self.flight_distance
-        if objective == "total": #WE WANT TO COMPUTE THE CO2 OF THE WHOLE FLIGHT (FLIGHT DISTANCE + DELAY)
-            distance = self.cruise_spd*delay + self.flight_distance
+        elif objective == "total": #WE WANT TO COMPUTE THE CO2 OF THE WHOLE FLIGHT (FLIGHT DISTANCE + DELAY)
+            distance = self.cruise_spd * delay + self.flight_distance
 
         #WE SET SOME FIX VALUES TO THOSE AIRCRAFT THAT DO NOT FOLLOW THE RESTRICTIONS OF THE FUNCTION GIVEN BY THE TEACHER
         if seats < 50: #minimum available seats for the function are 50.
@@ -119,6 +120,8 @@ class Flight:
 
     # COMPUTATION OF GROUND DELAY EMISSIONS PER CATEGORY OF AIRCRAFT
     def compute_ground_del_emissions(self, delay: int) -> float:  # return kg CO2/min in air delay flights (exempt flights)
+        if delay > 360:
+            return 1e15
         fuel_consum = 0
         match self.cat:  # depending on the category of the aircraft, when at APU consumes X amount (kg/min)
             case "A":
@@ -166,9 +169,11 @@ class Flight:
 
     def compute_costs(self, delay: int, air_costs: pd.DataFrame, ground_no_reac_costs: pd.DataFrame, ground_costs: pd.DataFrame, flights: pd.DataFrame) -> float:
         costs = pd.DataFrame()
-        if self.delay_type == "Air" and delay < 45:  # look for if delay type is Air
+        if self.delay_type == "None":
+            return 0.0
+        elif self.delay_type == "Air" and delay <= 45:  # look for if delay type is Air
             costs = air_costs  # if air delay use air delay table
-        elif self.delay_type == "Ground" and delay < 360:  # look for if delay type is Ground
+        elif self.delay_type == "Ground" and delay <= 360:  # look for if delay type is Ground
             # if ground delay look for if reactionary or not reactionary delay
             # to know if reactionary delay search if there is turn around flight
             matching_reg = flights[flights['RM'] == self.registration]  # Is there any other flight with the same RM (same plane, thus)?
@@ -213,8 +218,7 @@ class Flight:
                             else:
                                 costs = ground_no_reac_costs
                         case _:
-                            print(self.cat)
-                            raise ValueError("Invalid Category")
+                            raise ValueError(f"Invalid Category: {self.cat}")
 
         return self.cost_number(costs, delay) if not costs.empty else 10e12
 

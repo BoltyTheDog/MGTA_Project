@@ -14,7 +14,7 @@ ENABLE_VLG_CANCELLATIONS = False
 # "delay" sets cost array to 1
 # "emissions" computes cost array to minimize emissions
 # "costs" computes cost array to minimize costs
-GHP_OBJECTIVE = "costs"
+GHP_OBJECTIVE = "emissions"
 
 arrival_flights = f.initialise_flights("Data/LEBL_10AUG2025_ECAC.csv")
 
@@ -220,7 +220,11 @@ print("="*80)
 print("="*80)
 print("REMOVING FLIGHTS THAT HAVE A TRAIN ALTERNATIVE")
 print("="*80)
-new_flights, _, _ = f.compute_Flight_Emissions_D2DTime(initial_flights)
+
+_, rail_emissions, d2d_time = f.compute_Rail_Emissions_D2DTime(initial_flights)
+new_flights, flight_emissions, _ = f.compute_Flight_Emissions_D2DTime(initial_flights)
+print(f"RAIL D2D TIME: {d2d_time}")
+print(f"EMISSIONS SAVED: {flight_emissions - rail_emissions} kg CO2/journey")
 
 print("FLights eliminated = ", str(len(filtered_flights) - len(new_flights)))
 
