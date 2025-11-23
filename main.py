@@ -3,16 +3,21 @@ max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
 HStart: int = 11 # Regulation start hour
 HEnd: int = 18 # Regulation end hour
-HFile: int = 9.67 # Filing Hour
+HFile: float = 9.67 # Filing Hour
 distThreshold: int = 1550 # Radius in Km
 
 # Feature toggle: keep VLG cancellation/reslot experiments disabled by default so
 # GDP assignment/plots are not changed unexpectedly. Set to True to enable.
 ENABLE_VLG_CANCELLATIONS = False
 
+# Feature toggle: choose GHP objective to minimize
+# "delay" sets cost array to 1
+# "emissions" computes cost array to minimize emissions
+# "costs" computes cost array to minimize costs
+GHP_OBJECTIVE = "costs"
+
 arrival_flights = f.initialise_flights("Data/LEBL_10AUG2025_ECAC.csv")
 
-print(arrival_flights[0])
 if not arrival_flights:
     print("There are no flights to display")
     exit(1)
@@ -26,7 +31,7 @@ filtered_flights = f.filter_arrival_flights(arrival_flights, distThreshold, HSta
 initial_flights = filtered_flights.copy()
 
 
-Hstart_min: int = HStart*60  # 11:00 in minutes
+Hstart_min: int = HStart * 60  # 11:00 in minutes
 Hend_min: int = HEnd * 60   # 18:00 in minutes
 
 HNoReg_min = HNoReg * 60  # Convert to minutes
@@ -208,7 +213,7 @@ print("=" * 80)
 
 print("COMPUTING GHP ANALYSIS...")
 # (unitary cost => rf = 1) -> total cost = total delay
-f.compute_GHP(filtered_flights, slots, HStart, objective='costs')
+f.compute_GHP(filtered_flights, slots, HStart, objective=GHP_OBJECTIVE)
 
 print("="*80)
 print("="*80)
@@ -302,7 +307,7 @@ print("=" * 80)
 
 print("COMPUTING GHP ANALYSIS...")
 # (unitary cost => rf = 1) -> total cost = total delay
-f.compute_GHP(new_flights, slots, HStart, objective='costs')
+f.compute_GHP(new_flights, slots, HStart, objective=GHP_OBJECTIVE)
 
 
 

@@ -6,8 +6,8 @@ from datetime import datetime,timedelta  # import for 'timedeltas' (OPERATIONS W
 import pandas as pd  # import of the panda dictionary GHP FUNCTION
 from tqdm import tqdm
 from Classes.Flight import Flight  # import of the CLASS FLIGHT and its attributes
-
 from collections import Counter
+
 
 # imports for linear programming GHP algorithm WP3 (and numpy also for other matters as plots...)
 import numpy as np
@@ -351,7 +351,7 @@ def filter_arrival_flights(arrival_flights: list[Flight],
                            distance_threshold: float,
                            h_start: int,
                            h_no_reg: float,
-                           h_file: int) -> list[Flight]:
+                           h_file: float) -> list[Flight]:
     """
     Filters arrival flights and updates exemption and delay type attributes:
     - is_exempt = True for non-ECAC flights OR flights meeting exemption criteria
@@ -374,7 +374,7 @@ def filter_arrival_flights(arrival_flights: list[Flight],
         """Convert datetime object to hours since midnight"""
         return time_obj.hour + time_obj.minute / 60.0 + time_obj.second / 3600.0
 
-    def should_be_exempt(flight: Flight, dist_threshold: float, publishing_time: int) -> bool:
+    def should_be_exempt(flight: Flight, dist_threshold: float, publishing_time: float) -> bool:
         """
         Determine if flight should be exempt based on:
         1. NON-ECAC flight
@@ -451,10 +451,6 @@ def filter_arrival_flights(arrival_flights: list[Flight],
     return arrival_flights  # Return the same updated vector
 
 
-import pandas as pd
-import numpy as np
-from collections import Counter
-from datetime import datetime
 
 def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[Flight]:
     """
@@ -1059,7 +1055,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
     return r_f
 
 
-def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, hstart: int, objective=Literal["delay", "emissions", "costs"]):
+def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, hstart: int, objective = Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
       - filtered_arrivals: list of Flight objects (they must have .delay_type, .arr_time, .seats, etc.)
@@ -1493,7 +1489,7 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
         print("="*80)
 
 
-def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, HStart: int, 
+def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: float, HStart: int,
                                      HEnd: int, reduced_capacity: int, max_capacity: int,
                                      verbose: bool = False) -> None:
     """
@@ -1669,7 +1665,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     # Suppress stdout during loop to avoid clutter
     original_stdout = sys.stdout
     
-    for i, HFile in enumerate(hfile_values):
+    for i, HFile in tqdm(enumerate(hfile_values), desc="Plotting 3d analysis"):
         for j, distThreshold in enumerate(dist_threshold_values):
             iteration += 1
             
@@ -1682,9 +1678,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
             # Suppress console output for these function calls
             if sys.stdout == original_stdout:
                 sys.stdout = io.StringIO()
-            # Suppress console output for these function calls
-            if sys.stdout == original_stdout:
-                sys.stdout = io.StringIO()
+
             
             # Compute HNoReg
             HNoReg = compute_hnoreg(arrival_flights, HStart, HEnd, max_capacity, reduced_capacity)
