@@ -3,8 +3,8 @@ max_capacity: int = 40  # LEBL max capacity
 reduced_capacity: int = 20  # LEBL reduced capacity
 HStart: int = 11 # Regulation start hour
 HEnd: int = 18 # Regulation end hour
-HFile: int = 9 # Filing Hour
-distThreshold: int = 3500 # Radius in Km
+HFile: int = 9.67 # Filing Hour
+distThreshold: int = 1550 # Radius in Km
 
 arrival_flights = f.initialise_flights("Data/LEBL_10AUG2025_ECAC.csv")
 
@@ -40,9 +40,6 @@ f.print_delay_statistics(slotted_arrivals)
 # Cancel top-10 VLG flights and re-run slotting prioritizing VLG; print comparison
 print("\nApplying cancellations (top-10 VLG delays) and re-slotting with VLG priority...")
 slotted_arrivals = f.cancel_and_reslot(slotted_arrivals, slots, company='VLG', n_cancel=10)
-
-# Plot and print statistics after reslotting
-# Enforce capacity again after the reslot operation to ensure no hour exceeds limits
 f.enforce_capacity(slots, slotted_arrivals, HStart, HEnd, reduced_capacity, max_capacity)
 f.plot_slotted_arrivals(slotted_arrivals, max_capacity, HStart, HEnd)
 f.print_delay_statistics(slotted_arrivals)
@@ -88,26 +85,26 @@ for i, flight in enumerate(sorted_flights, 1):
         air_del_emission_count += air_emission
         rf_GDP.append(air_emission)
     if flight.delay_type == "Ground":
-        ground_emission = flight.compute_ground_del_emissions()
+        ground_emission = flight.compute_ground_del_emissions(delay)
         if delay > 60:
             ground_emission = ground_emission / 9
-            ground_del_emission_count += flight.compute_ground_del_emissions()
+            ground_del_emission_count += flight.compute_ground_del_emissions(delay)
         else:
-            ground_del_emission_count += flight.compute_ground_del_emissions()
+            ground_del_emission_count += flight.compute_ground_del_emissions(delay)
         rf_GDP.append(ground_emission)
 
 
 print("="*80)
 print(f"Unrecoverable delay = {unrecoverabledelay} mins")
 print("="*80)
-print(f"# of flights with 15+ minutes of delay: {otpcounter}")
+print(f"# of flights with -15 minutes of delay: {otpcounter}")
 print("="*80)
 print("Total of emissions/min from air delay:", air_del_emission_count, "kg of CO2")
 print("Total of emissions/min from ground delay:", ground_del_emission_count, "kg of CO2")
 
 
 # (unitary cost => rf = 1) -> total cost = total delay
-f.compute_GHP(filtered_flights, slots, objective='costs')
+# f.compute_GHP(filtered_flights, slots, objective='costs')
 '''
 # minimizar emisiones
 slotted_arrivals_cost, totalcost2 = f.compute_GHP(filtered_flights, slots, rf_vector=rf, objective='emissions')
@@ -127,16 +124,16 @@ f.print_delay_statistics(slotted_arrivals_cost)
 '''
 # Plot HFile analysis graph
 print("\n" + "="*80)
-print("GENERATING HFILE ANALYSIS GRAPH")
+print("GENERATING HFILE ANALYSIS GRAPH (quiet)")
 print("="*80)
-f.plot_hfile_analysis(arrival_flights, distThreshold, HStart, HEnd, reduced_capacity, max_capacity)
+# f.plot_hfile_analysis(arrival_flights, distThreshold, HStart, HEnd, reduced_capacity, max_capacity, verbose=False)
 
 
 # Plot Distance Threshold analysis graph
 print("\n" + "="*80)
-print("GENERATING DISTANCE THRESHOLD ANALYSIS GRAPH")
+print("GENERATING DISTANCE THRESHOLD ANALYSIS GRAPH (quiet)")
 print("="*80)
-f.plot_distance_threshold_analysis(arrival_flights, HFile, HStart, HEnd, reduced_capacity, max_capacity)
+# f.plot_distance_threshold_analysis(arrival_flights, HFile, HStart, HEnd, reduced_capacity, max_capacity, verbose=False)
 
 
 # Plot 3D analysis with HFile vs Distance Threshold

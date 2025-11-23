@@ -51,20 +51,39 @@ class Flight:
 
     #FUNCTION THAT COMPUTES THE UNRECOVERABLE DELAY OF AN AIRCRAFT RECIEVING THE DELAY OF THE FLIGHT AND THE TIME THE REGULATION STARTS AS INPUTS.
     def computeunrecdel(self, delay: int, hstart: int) -> float:
+        """
+        Compute unrecoverable ground delay assuming the GDP is cancelled at hour `hstart`.
 
-        unrecoverabledelay: float = 0
-        hstarttime = datetime.strptime(str(hstart), "%H")
+        Interpretation & parameters used here (adapted from the Matlab template):
+        - ETD (original estimated time of departure) is taken from self.dep_time
+        - CTD (assigned cleared time of departure) is ETD + delay (minutes)
+        - hstart is the hour (integer or float hours) when the GDP is cancelled
 
-        ctd = self.dep_time + timedelta(minutes=int(delay))
-        if self.dep_time > hstarttime:
-            unrecoverabledelay = 0
-        elif ctd < hstarttime:
-            unrecoverabledelay = delay
-        elif self.dep_time < hstarttime < ctd:
-            delaydiff = hstarttime - self.dep_time
-            unrecoverabledelay = delaydiff.seconds / 60
+        Cases (minutes returned):
+        1) If ETD >= Hstart -> all assigned delay happens after cancellation -> 0 unrecoverable
+        2) If CTD <= Hstart -> entire assigned delay already executed before cancellation -> unrecoverable = CTD - ETD (== delay)
+        3) If ETD < Hstart < CTD -> part executed before cancellation -> unrecoverable = Hstart - ETD
 
-        return unrecoverabledelay
+        Returns unrecoverable delay in minutes (float).
+        """
+
+        # Convert times to minutes since midnight for simple arithmetic
+        etd_minutes = self.dep_time.hour * 60 + self.dep_time.minute + self.dep_time.second / 60.0
+        ctd_minutes = etd_minutes + float(delay)
+        hstart_minutes = float(hstart) * 60.0
+
+        # Case 1: ETD >= Hstart -> no unrecoverable delay
+        if etd_minutes >= hstart_minutes:
+            return 0.0
+
+        # Case 2: CTD <= Hstart -> all assigned delay already executed
+        if ctd_minutes <= hstart_minutes:
+            # CTD - ETD (should equal delay)
+            return max(0.0, ctd_minutes - etd_minutes)
+
+        # Case 3: ETD < Hstart < CTD -> partial unrecoverable
+        # Unrecoverable portion is the time from ETD up to Hstart
+        return max(0.0, hstart_minutes - etd_minutes)
 
 
     #FUNCTION TO COMPUTE THE AIR DELAY EMISSIONS USING THE GIVEN FUNCTION BY THE TEACHER.

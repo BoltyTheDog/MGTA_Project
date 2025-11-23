@@ -723,7 +723,8 @@ def cancel_and_reslot(slotted_arrivals: list[Flight], slots: np.ndarray, company
                 'count': len(arr),
                 'total': float(arr.sum()) if arr.size else 0.0,
                 'mean': float(arr.mean()) if arr.size else 0.0,
-                'std': float(arr.std(ddof=1)) if arr.size>1 else 0.0
+                'std': float(arr.std(ddof=1)) if arr.size>1 else 0.0,
+                'rsd': (float(arr.std(ddof=1)) / float(arr.mean()) * 100.0) if arr.size>1 and float(arr.mean()) != 0 else 0.0
             }
         return {'air': summ(air), 'ground': summ(ground)}
 
@@ -738,14 +739,17 @@ def cancel_and_reslot(slotted_arrivals: list[Flight], slots: np.ndarray, company
 
     print(f"Cancelling up to {n_cancel} flights from {company} (found {len(to_cancel)})")
 
-    # Mark cancellations and free their slots
+    # Mark cancellations and free their slots; record freed indices
+    freed_slot_indices = []
     for f in to_cancel:
         idx = getattr(f, 'assigned_slot_index', None)
         if idx is not None and 0 <= idx < len(slots):
+            # free the exact slot (leave other slots intact)
             slots[idx][1] = 0
             slots[idx][2] = 0
             slots[idx][3] = 0
             slots[idx][4] = 0
+            freed_slot_indices.append(idx)
         f.assigned_slot_time = None
         f.assigned_slot_index = None
         f.assigned_delay = 0
@@ -754,12 +758,7 @@ def cancel_and_reslot(slotted_arrivals: list[Flight], slots: np.ndarray, company
     # Prepare list of flights to reassign: all flights that need slots and are not cancelled
     flights_to_slot = [f for f in slotted_arrivals if f.delay_type in ("Air", "Ground") and not getattr(f, 'is_cancelled', False)]
 
-    # Clear any previous assignment markers in slots to rebuild
-    for i in range(len(slots)):
-        slots[i][1] = 0
-        slots[i][2] = 0
-        slots[i][3] = 0
-        slots[i][4] = 0
+    # Note: do NOT clear all slots. We only freed the cancelled slots above
 
     # Ensure flights that had delay_type == 'None' keep their original ETA assigned
     for f in slotted_arrivals:
@@ -770,14 +769,14 @@ def cancel_and_reslot(slotted_arrivals: list[Flight], slots: np.ndarray, company
     # Determine per-hour available slot counts from slots (to enforce capacity during re-assignment)
     slot_hours = [int(s[0]) // 60 for s in slots]
     slot_count_by_hour = Counter(slot_hours)
+    # Count currently occupied slots per hour (after cancellations)
     assigned_count_by_hour: dict[int, int] = {}
-    # Pre-count flights that keep original schedule (delay_type == 'None') as occupying their hour
-    for f in slotted_arrivals:
-        if f.delay_type == 'None' and getattr(f, 'assigned_slot_time', None) is not None:
-            h = int(f.assigned_slot_time) // 60
+    for s in slots:
+        if s[1] != 0:
+            h = int(s[0]) // 60
             assigned_count_by_hour[h] = assigned_count_by_hour.get(h, 0) + 1
 
-    # Prioritize company flights first, then others. Within groups, sort by original ETA ascending
+    # Prepare candidate groups: company flights first, then others. Within groups, sort by original ETA ascending
     def orig_eta(f):
         return f.arr_time.hour * 60 + f.arr_time.minute
 
@@ -787,47 +786,96 @@ def cancel_and_reslot(slotted_arrivals: list[Flight], slots: np.ndarray, company
     other_group.sort(key=orig_eta)
     new_queue = priority_group + other_group
 
-    # Reassign: reuse assign_flight_to_slot logic (inline minimal implementation)
-    for f in new_queue:
-        original_eta = f.arr_time.hour * 60 + f.arr_time.minute
-        assigned = False
-        for i, slot in enumerate(slots):
-            slot_time = slot[0]
-            slot_hour = int(slot_time) // 60
+    # Iteratively fill freed slots: for each freed slot try to place a company flight whose ETA allows, else put the next flight.
+    # When moving an already-assigned flight into a freed slot, its previous slot becomes freed and gets appended to the work queue.
+    from collections import deque
+    freed_queue = deque(sorted(set(freed_slot_indices)))
 
-            # Enforce per-hour capacity: skip this slot if the hour is already full
-            if assigned_count_by_hour.get(slot_hour, 0) >= slot_count_by_hour.get(slot_hour, 0):
-                continue
+    # Helper to find a candidate flight from a list for a given slot_time
+    def find_candidate_for_slot(slot_time: int, candidates: list[Flight]):
+        # Prefer the earliest original ETA candidate that can be placed in this slot (original_eta <= slot_time)
+        for cf in candidates:
+            original_eta = cf.arr_time.hour * 60 + cf.arr_time.minute
+            # Candidate must be allowed (slot_time >= original ETA)
+            if original_eta <= slot_time:
+                # Also avoid assigning a flight to a slot earlier than it's already assigned
+                if getattr(cf, 'assigned_slot_time', None) is None or (cf.assigned_slot_time is not None and cf.assigned_slot_time > slot_time):
+                    return cf
+        return None
 
-            if slot[1] == 0 and slot_time >= original_eta:
-                slots[i][1] = hash(f.callsign) % 10000
-                slots[i][2] = hash(f.callsign[:3]) % 1000
-                delay_minutes = slot_time - original_eta
-                f.assigned_slot_time = slot_time
-                f.assigned_slot_index = i
-                f.assigned_delay = delay_minutes
-                # increment assigned count for that hour
-                assigned_count_by_hour[slot_hour] = assigned_count_by_hour.get(slot_hour, 0) + 1
-                if getattr(f, 'is_exempt', False):
-                    slots[i][3] = delay_minutes
-                    slots[i][4] = 0
-                else:
-                    slots[i][3] = 0
-                    slots[i][4] = delay_minutes
-                assigned = True
-                break
-        if not assigned:
-            # Couldn't find suitable slot respecting hourly capacity; leave unassigned
-            f.assigned_slot_time = None
-            f.assigned_slot_index = None
-            f.assigned_delay = 0
+    # To avoid pathological infinite loops, cap iterations by number of slots * 3
+    safety_limit = len(slots) * 3
+    iterations = 0
+
+    while freed_queue and iterations < safety_limit:
+        iterations += 1
+        slot_idx = freed_queue.popleft()
+        slot_time = slots[slot_idx][0]
+        slot_hour = int(slot_time) // 60
+
+        # Skip if capacity for this hour is already full (shouldn't happen often)
+        if assigned_count_by_hour.get(slot_hour, 0) >= slot_count_by_hour.get(slot_hour, 0):
+            # cannot place in this hour at the moment; leave it free
+            continue
+
+        # Try to find a company flight suitable for this exact slot
+        candidate = find_candidate_for_slot(slot_time, priority_group)
+        moved = False
+
+        # If no company flight found, try general queue
+        if candidate is None:
+            candidate = find_candidate_for_slot(slot_time, other_group)
+
+        if candidate is not None:
+            # If candidate currently has a slot, free it (it will be appended to the freed_queue)
+            old_idx = getattr(candidate, 'assigned_slot_index', None)
+            if old_idx is not None and 0 <= old_idx < len(slots):
+                # free previous slot
+                slots[old_idx][1] = 0
+                slots[old_idx][2] = 0
+                slots[old_idx][3] = 0
+                slots[old_idx][4] = 0
+                old_hour = int(slots[old_idx][0]) // 60
+                # decrement occupancy from old hour
+                assigned_count_by_hour[old_hour] = max(0, assigned_count_by_hour.get(old_hour, 0) - 1)
+                # the freed old slot should be considered for reassignment
+                freed_queue.append(old_idx)
+
+            # Assign candidate to this slot
+            slots[slot_idx][1] = hash(candidate.callsign) % 10000
+            slots[slot_idx][2] = hash(candidate.callsign[:3]) % 1000
+            delay_minutes = slot_time - (candidate.arr_time.hour * 60 + candidate.arr_time.minute)
+            candidate.assigned_slot_time = slot_time
+            candidate.assigned_slot_index = slot_idx
+            candidate.assigned_delay = delay_minutes
+
+            # increment occupancy for this slot's hour
+            assigned_count_by_hour[slot_hour] = assigned_count_by_hour.get(slot_hour, 0) + 1
+
+            # fill the slot delay fields
+            if getattr(candidate, 'is_exempt', False):
+                slots[slot_idx][3] = delay_minutes
+                slots[slot_idx][4] = 0
+            else:
+                slots[slot_idx][3] = 0
+                slots[slot_idx][4] = delay_minutes
+
+            moved = True
+
+        # If we couldn't place any flight into this freed slot, leave it empty and continue
+        if not moved:
+            # no candidate available for this exact slot time; continue to next freed slot
+            continue
 
     # Compute after metrics
     after_metrics = compute_delay_metrics(slotted_arrivals)
 
     # Print comparison
     def print_metric_comp(name, before, after):
-        print(f"{name} - Before: total={before['total']:.1f} min, mean={before['mean']:.1f} min, N={before['count']}; After: total={after['total']:.1f} min, mean={after['mean']:.1f} min, N={after['count']}")
+        print(
+            f"{name} - Before: total={before['total']:.1f} min, mean={before['mean']:.1f} min, std={before.get('std',0):.1f} min, RSD={before.get('rsd',0):.1f}%, N={before['count']}; "
+            f"After: total={after['total']:.1f} min, mean={after['mean']:.1f} min, std={after.get('std',0):.1f} min, RSD={after.get('rsd',0):.1f}%, N={after['count']}"
+        )
 
     print("\nMETRICS COMPARISON (Before vs After cancellations):")
     print_metric_comp('Air delay', before_metrics['air'], after_metrics['air'])
@@ -878,14 +926,20 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
             }
         
         delays_array = np.array(delays)
+        # Use sample std (ddof=1) when there are multiple samples, otherwise 0
+        count = len(delays_array)
+        mean = float(np.mean(delays_array))
+        std = float(np.std(delays_array, ddof=1)) if count > 1 else 0.0
+        rsd = (std / mean * 100.0) if mean != 0 else 0.0
         return {
-            'count': len(delays),
-            'total': np.sum(delays_array),
-            'mean': np.mean(delays_array),
-            'median': np.median(delays_array),
-            'std': np.std(delays_array),
-            'min': np.min(delays_array),
-            'max': np.max(delays_array)
+            'count': count,
+            'total': float(np.sum(delays_array)),
+            'mean': mean,
+            'median': float(np.median(delays_array)),
+            'std': std,
+            'rsd': rsd,
+            'min': float(np.min(delays_array)),
+            'max': float(np.max(delays_array))
         }
     
     # Calculate statistics for each category
@@ -906,6 +960,7 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
         print(f"  Mean delay: {stats['mean']:.1f} minutes")
         print(f"  Median delay: {stats['median']:.1f} minutes")
         print(f"  Standard deviation: {stats['std']:.1f} minutes")
+        print(f"  Relative SD (RSD): {stats.get('rsd', 0.0):.1f}%")
         print(f"  Minimum delay: {stats['min']:.0f} minutes")
         print(f"  Maximum delay: {stats['max']:.0f} minutes")
     
@@ -1164,7 +1219,8 @@ def plot_train_vs_flight_emissions_times():
 
 
 def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStart: int,
-                        HEnd: int, reduced_capacity: int, max_capacity: int) -> None:
+                        HEnd: int, reduced_capacity: int, max_capacity: int,
+                        verbose: bool = False) -> None:
     """
     Plot Air Delay, Ground Delay, Unrecoverable Delay, and Emissions against HFile values.
     
@@ -1190,9 +1246,10 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
     unrecoverable_delays = []
     total_emissions = []
     
-    print("\n" + "="*80)
-    print("ANALYZING HFILE VARIATIONS (6:00 to 11:00)")
-    print("="*80)
+    if verbose:
+        print("\n" + "="*80)
+        print("ANALYZING HFILE VARIATIONS (6:00 to 11:00)")
+        print("="*80)
     
     # For each HFile value, compute the metrics
     for HFile in hfile_values:
@@ -1233,9 +1290,9 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
             elif delay_type == "Ground":
                 total_ground_delay += delay
                 if delay > 60:
-                    ground_emissions += flight.compute_ground_del_emissions() / 9
+                    ground_emissions += flight.compute_ground_del_emissions(delay) / 9
                 else:
-                    ground_emissions += flight.compute_ground_del_emissions()
+                    ground_emissions += flight.compute_ground_del_emissions(delay)
         
         # Store metrics
         air_delays.append(total_air_delay)
@@ -1243,8 +1300,9 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
         unrecoverable_delays.append(total_unrecoverable_delay)
         total_emissions.append(air_emissions + ground_emissions)
         
-        print(f"HFile={HFile:.2f}h: Air={total_air_delay:.1f}min, Ground={total_ground_delay:.1f}min, "
-              f"Unrec={total_unrecoverable_delay:.1f}min, Emissions={air_emissions + ground_emissions:.2f}kg CO2")
+        if verbose:
+            print(f"HFile={HFile:.2f}h: Air={total_air_delay:.1f}min, Ground={total_ground_delay:.1f}min, "
+                f"Unrec={total_unrecoverable_delay:.1f}min, Emissions={air_emissions + ground_emissions:.2f}kg CO2")
     
     # Create the plot
     fig, ax1 = plt.subplots(figsize=(14, 8))
@@ -1289,13 +1347,15 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
     plt.tight_layout()
     plt.show()
     
-    print("="*80)
-    print("HFILE ANALYSIS COMPLETE")
-    print("="*80)
+    if verbose:
+        print("="*80)
+        print("HFILE ANALYSIS COMPLETE")
+        print("="*80)
 
 
 def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, HStart: int, 
-                                     HEnd: int, reduced_capacity: int, max_capacity: int) -> None:
+                                     HEnd: int, reduced_capacity: int, max_capacity: int,
+                                     verbose: bool = False) -> None:
     """
     Plot Air Delay, Ground Delay, Unrecoverable Delay, and Emissions against Distance Threshold values.
     
@@ -1317,9 +1377,10 @@ def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, 
     unrecoverable_delays = []
     total_emissions = []
     
-    print("\n" + "="*80)
-    print("ANALYZING DISTANCE THRESHOLD VARIATIONS (0 to 3000km)")
-    print("="*80)
+    if verbose:
+        print("\n" + "="*80)
+        print("ANALYZING DISTANCE THRESHOLD VARIATIONS (0 to 3000km)")
+        print("="*80)
     
     # For each distance threshold value, compute the metrics
     for distThreshold in dist_threshold_values:
@@ -1360,9 +1421,9 @@ def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, 
             elif delay_type == "Ground":
                 total_ground_delay += delay
                 if delay > 60:
-                    ground_emissions += flight.compute_ground_del_emissions() / 9
+                    ground_emissions += flight.compute_ground_del_emissions(delay) / 9
                 else:
-                    ground_emissions += flight.compute_ground_del_emissions()
+                    ground_emissions += flight.compute_ground_del_emissions(delay)
         
         # Store metrics
         air_delays.append(total_air_delay)
@@ -1370,8 +1431,8 @@ def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, 
         unrecoverable_delays.append(total_unrecoverable_delay)
         total_emissions.append(air_emissions + ground_emissions)
         
-        # Print progress every 500km
-        if distThreshold % 500 == 0 or distThreshold == 200:
+        # Print progress every 500km (only when verbose)
+        if verbose and (distThreshold % 500 == 0 or distThreshold == 200):
             print(f"DistThreshold={distThreshold}km: Air={total_air_delay:.1f}min, Ground={total_ground_delay:.1f}min, "
                   f"Unrec={total_unrecoverable_delay:.1f}min, Emissions={air_emissions + ground_emissions:.2f}kg CO2")
     
@@ -1522,9 +1583,9 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
                     air_emissions += flight.compute_air_del_emissions(delay, "delay")
                 elif delay_type == "Ground":
                     if delay > 60:
-                        ground_emissions += flight.compute_ground_del_emissions() / 9
+                        ground_emissions += flight.compute_ground_del_emissions(delay) / 9
                     else:
-                        ground_emissions += flight.compute_ground_del_emissions()
+                        ground_emissions += flight.compute_ground_del_emissions(delay)
             
             # Store in 2D arrays
             unrecoverable_delays[i, j] = total_unrecoverable_delay
@@ -1538,8 +1599,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     # Create meshgrid for 3D plotting
     X, Y = np.meshgrid(dist_threshold_values, hfile_values)
     
-    # Create figure with 2x2 subplots
-    fig = plt.figure(figsize=(20, 16))
+    # We'll save each plot as its own high-quality image for better clarity
     
     # Normalize each metric to 0-1 before plotting the surfaces (preserve values for weighted combination)
     norm_unrec = (unrecoverable_delays - unrecoverable_delays.min()) / (unrecoverable_delays.max() - unrecoverable_delays.min() + 1e-10)
@@ -1547,34 +1607,87 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     norm_emissions = (total_emissions - total_emissions.min()) / (total_emissions.max() - total_emissions.min() + 1e-10)
 
     # 1. 3D Surface: Unrecoverable Delay (raw values)
-    ax1 = fig.add_subplot(2, 2, 1, projection='3d')
+    fig1 = plt.figure(figsize=(16, 12))
+    ax1 = fig1.add_subplot(111, projection='3d')
     surf1 = ax1.plot_surface(X, Y, unrecoverable_delays, cmap='viridis', alpha=0.9, edgecolor='none')
     ax1.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
     ax1.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
     ax1.set_zlabel('Unrecoverable Delay (min)', fontsize=10, fontweight='bold')
     ax1.set_title('Unrecoverable Delay vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
-    fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5)
+    # move the colorbar slightly away from the axes to add whitespace (pad controls distance)
+    fig1.colorbar(surf1, ax=ax1, shrink=0.5, aspect=5, pad=0.14)
+    # Improve readability: larger fonts and more whitespace
+    ax1.title.set_fontsize(18)
+    ax1.xaxis.label.set_size(14)
+    ax1.yaxis.label.set_size(14)
+    ax1.zaxis.label.set_size(14)
+    # add label padding so titles/labels aren't cramped against axes
+    ax1.xaxis.labelpad = 12
+    ax1.yaxis.labelpad = 12
+    try:
+        ax1.zaxis.labelpad = 10
+    except Exception:
+        pass
+    ax1.tick_params(axis='both', which='major', labelsize=12)
+    if hasattr(ax1, 'zaxis'):
+        ax1.zaxis.set_major_formatter(lambda x, pos: f"{x:.0f}")
+    fig1.tight_layout(pad=3.0)
+    fig1.subplots_adjust(left=0.08, right=0.96, top=0.94, bottom=0.06)
+    plt.show()
 
     # 2. 3D Surface: Air Delay (raw values)
-    ax2 = fig.add_subplot(2, 2, 2, projection='3d')
+    # 2. 3D Surface: Air Delay (raw values)
+    fig2 = plt.figure(figsize=(16, 12))
+    ax2 = fig2.add_subplot(111, projection='3d')
     surf2 = ax2.plot_surface(X, Y, air_delays, cmap='plasma', alpha=0.9, edgecolor='none')
     ax2.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
     ax2.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
     ax2.set_zlabel('Air Delay (min)', fontsize=10, fontweight='bold')
     ax2.set_title('Air Delay vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
-    fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5)
+    fig2.colorbar(surf2, ax=ax2, shrink=0.5, aspect=5, pad=0.14)
+    ax2.title.set_fontsize(18)
+    ax2.xaxis.label.set_size(14)
+    ax2.yaxis.label.set_size(14)
+    ax2.zaxis.label.set_size(14)
+    ax2.xaxis.labelpad = 12
+    ax2.yaxis.labelpad = 12
+    try:
+        ax2.zaxis.labelpad = 10
+    except Exception:
+        pass
+    ax2.tick_params(axis='both', which='major', labelsize=12)
+    fig2.tight_layout(pad=3.0)
+    fig2.subplots_adjust(left=0.08, right=0.96, top=0.94, bottom=0.06)
+    plt.show()
 
     # 3. 3D Surface: Total Emissions (raw values)
-    ax3 = fig.add_subplot(2, 2, 3, projection='3d')
+    # 3. 3D Surface: Total Emissions (raw values)
+    fig3 = plt.figure(figsize=(16, 12))
+    ax3 = fig3.add_subplot(111, projection='3d')
     surf3 = ax3.plot_surface(X, Y, total_emissions, cmap='inferno', alpha=0.9, edgecolor='none')
     ax3.set_xlabel('Distance Threshold (km)', fontsize=10, fontweight='bold')
     ax3.set_ylabel('HFile (hours)', fontsize=10, fontweight='bold')
     ax3.set_zlabel('Total Emissions (kg CO2)', fontsize=10, fontweight='bold')
     ax3.set_title('Total Emissions vs HFile & Distance Threshold', fontsize=12, fontweight='bold', pad=15)
-    fig.colorbar(surf3, ax=ax3, shrink=0.5, aspect=5)
+    fig3.colorbar(surf3, ax=ax3, shrink=0.5, aspect=5, pad=0.14)
+    ax3.title.set_fontsize(18)
+    ax3.xaxis.label.set_size(14)
+    ax3.yaxis.label.set_size(14)
+    ax3.zaxis.label.set_size(14)
+    ax3.xaxis.labelpad = 12
+    ax3.yaxis.labelpad = 12
+    try:
+        ax3.zaxis.labelpad = 10
+    except Exception:
+        pass
+    ax3.tick_params(axis='both', which='major', labelsize=12)
+    fig3.tight_layout(pad=3.0)
+    fig3.subplots_adjust(left=0.08, right=0.96, top=0.94, bottom=0.06)
+    plt.show()
     
     # 4. Heatmap: Combined normalized score
-    ax4 = fig.add_subplot(2, 2, 4)
+    fig4 = plt.figure(figsize=(12, 10))
+    ax4 = fig4.add_subplot(111)
     
     # Normalize each metric to 0-1 scale (lower is better)
     norm_unrec = (unrecoverable_delays - unrecoverable_delays.min()) / (unrecoverable_delays.max() - unrecoverable_delays.min() + 1e-10)
@@ -1583,9 +1696,9 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     
     # Define weights for each metric (adjust these based on priority)
     # Higher weight = more importance in the final score
-    weight_unrec = 10.0      # Unrecoverable delay weight
-    weight_air = 10.0         # Air delay weight
-    weight_emissions = 1.0   # Emissions weight
+    weight_unrec = 10     # Unrecoverable delay weight
+    weight_air = 20        # Air delay weight
+    weight_emissions = 1   # Emissions weight
     
     # Combined score with weighted normalization
     combined_score = (weight_unrec * norm_unrec + 
@@ -1602,7 +1715,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     
     # Create heatmap
     im = ax4.imshow(combined_score, cmap='RdYlGn_r', aspect='auto', origin='lower',
-                    extent=[dist_threshold_values[0], dist_threshold_values[-1], 
+                    extent=[dist_threshold_values[0], dist_threshold_values[-1],
                            hfile_values[0], hfile_values[-1]])
     
     # Mark optimal point
@@ -1615,7 +1728,7 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
                   fontsize=11, fontweight='bold')
     
     # Add colorbar
-    cbar = fig.colorbar(im, ax=ax4)
+    cbar = fig4.colorbar(im, ax=ax4)
     cbar.set_label('Combined Score', fontsize=10)
     
     # Add legend
@@ -1624,13 +1737,14 @@ def plot_3d_analysis(arrival_flights: list[Flight], HStart: int, HEnd: int,
     # Add grid
     ax4.grid(True, alpha=0.3, linestyle='--')
     
-    plt.tight_layout()
-    
-    # Save the figure
-    output_filename = 'HFile_vs_DistThreshold_3D_Analysis.jpg'
-    plt.savefig(output_filename, dpi=300, bbox_inches='tight', format='jpg')
-    print(f"\nFigure saved as: {output_filename}")
-    
+    # Improve heatmap readability: larger fonts and more whitespace
+    ax4.title.set_fontsize(16)
+    ax4.xaxis.label.set_size(14)
+    ax4.yaxis.label.set_size(14)
+    ax4.tick_params(axis='both', which='major', labelsize=12)
+    cbar.ax.tick_params(labelsize=12)
+    fig4.tight_layout(pad=3.0)
+    fig4.subplots_adjust(left=0.08, right=0.96, top=0.92, bottom=0.08)
     plt.show()
     
     # Print data ranges to understand scales
