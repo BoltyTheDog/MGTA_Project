@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt  # import for plots
 from datetime import datetime,timedelta  # import for 'timedeltas' (OPERATIONS WITH DATETIME OBJECTS)
 
 import pandas as pd  # import of the panda dictionary GHP FUNCTION
-
+from tqdm import tqdm
 from Classes.Flight import Flight  # import of the CLASS FLIGHT and its attributes
 
 from collections import Counter
@@ -111,9 +111,10 @@ def plot_flight_count(flights: list[Flight], max_capacity: int, reghstart: int, 
     plt.ylabel("Number of arrivals")
     plt.title("Arrivals per hour")
 
-    plt.hlines(y=max_capacity, xmin=0, xmax=reghstart, colors="green", linewidth=2)
-    plt.hlines(y=(max_capacity / 2), xmin=reghstart, xmax=reghend, colors="red", linewidth=2)
+    plt.hlines(y=max_capacity, xmin=0, xmax=reghstart, colors="green", linewidth=2, label=f"Normal capacity ({max_capacity})")
+    plt.hlines(y=(max_capacity // 2), xmin=reghstart, xmax=reghend, colors="red", linewidth=2, label=f"Reduced capacity ({max_capacity // 2})")
     plt.hlines(y=max_capacity, xmin=reghend, xmax=24, colors="green", linewidth=2)
+    plt.legend(loc='upper left', bbox_to_anchor=(0.45, 0.3))
 
     plt.show()
     return None
@@ -450,52 +451,61 @@ def filter_arrival_flights(arrival_flights: list[Flight],
     return arrival_flights  # Return the same updated vector
 
 
+import pandas as pd
+import numpy as np
+from collections import Counter
+from datetime import datetime
+
 def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[Flight]:
     """
-    Assigns slots to flights according to Ground Delay Program (GDP) rules:
-    1. Only assigns slots to flights that need regulation (delay_type = "Air" or "Ground")
-    2. Exempt flights with "Air" delay are assigned first (with air delay)
-    3. Controlled flights with "Ground" delay are assigned second (with ground delay)
-    4. No flight can be assigned a slot before its original ETA
-    5. Flights with delay_type = "None" are not assigned slots (they arrive as scheduled)
-    
+    Assigns slots to flights according to Ground Delay Program (GDP) rules and computes costs.
+
     Parameters:
     filtered_arrivals: list[Flight] - List of flights to assign slots to
     slots: np.ndarray - Slots matrix [slot_time, flight_id, airline_id, air_delay, ground_delay]
-    
+
     Returns:
-    list[Flight] - Updated list of flights with assigned slots and delays
+    list[Flight] - Updated list of flights with assigned slots, delays, and costs
     """
-    
+
+    # Load cost data and flight data
+    air_costs = pd.read_csv("Data/AirCosts.csv")  # call the table for air delay costs
+    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")  # call the table for ground not reactionary delay
+    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")  # call the table for ground reactionary delay
+    flight_data = pd.read_csv("Data/LEBL_10AUG2025_ECAC.csv", delimiter=";", encoding='latin-1')
+
     def time_to_minutes(time_obj: datetime) -> int:
         """Convert datetime object to minutes since midnight"""
         return time_obj.hour * 60 + time_obj.minute
 
-    
+    total_costs = 0
     # Create a copy of the slots matrix to work with
     available_slots = slots.copy()
-    
+
     # Create copies of flights to avoid modifying the original list
     slotted_arrivals = list(filtered_arrivals)
-    
+
     # Filter flights that actually need slot assignment (only those with Air or Ground delay types)
     flights_needing_slots = [f for f in slotted_arrivals if f.delay_type in ["Air", "Ground"]]
     flights_not_needing_slots = [f for f in slotted_arrivals if f.delay_type == "None"]
-    
+
     print(f"Total flights: {len(slotted_arrivals)}")
     print(f"Flights needing slot assignment: {len(flights_needing_slots)} (Air: {sum(1 for f in flights_needing_slots if f.delay_type == 'Air')}, Ground: {sum(1 for f in flights_needing_slots if f.delay_type == 'Ground')})")
     print(f"Flights not needing slots (arriving as scheduled): {len(flights_not_needing_slots)}")
-    
+
     # Add new attributes to track slot assignment for all flights
     for flight in slotted_arrivals:
         flight.assigned_slot_time = None  # Will store assigned slot time in minutes
         flight.assigned_delay = 0  # Will store total delay in minutes
+        flight.assigned_cost = 0  # Will store computed cost
         flight.original_eta_minutes = time_to_minutes(flight.arr_time)
-        
+
         # Flights with delay_type "None" keep their original schedule
         if flight.delay_type == "None":
             flight.assigned_slot_time = flight.original_eta_minutes
             flight.assigned_delay = 0
+            # Compute cost for flights with no delay (delay = 0)
+            flight.assigned_cost = flight.compute_costs(0, air_costs, ground_no_reac_costs, ground_costs, flight_data)
 
     # Determine per-hour available slot counts from slots (to enforce capacity)
     # hour -> number of slots available in that hour
@@ -508,23 +518,23 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
         if f.delay_type == 'None' and f.assigned_slot_time is not None:
             h = int(f.assigned_slot_time) // 60
             assigned_count_by_hour[h] = assigned_count_by_hour.get(h, 0) + 1
-    
+
     # Sort only the flights that need slots by original ETA for sequential assignment
     flights_needing_slots.sort(key=lambda f: f.original_eta_minutes)
-    
+
     # Phase 1: Assign exempt flights that need Air delay
     exempt_flights_needing_slots = [f for f in flights_needing_slots if f.delay_type == "Air"]
     controlled_flights_needing_slots = [f for f in flights_needing_slots if f.delay_type == "Ground"]
-    
+
     print(f"Assigning slots for {len(exempt_flights_needing_slots)} exempt flights (Air delay) and {len(controlled_flights_needing_slots)} controlled flights (Ground delay)")
-    
+
     def assign_flight_to_slot(flight: Flight, is_exempt: bool) -> bool:
         """
         Assign a flight to the first available slot that's not before its original ETA
         Returns True if assignment successful, False otherwise
         """
         original_eta = flight.original_eta_minutes
-        
+
         # Find the first available slot that's not before the original ETA
         for i, slot in enumerate(available_slots):
             slot_time = slot[0]  # slot time in minutes
@@ -540,15 +550,19 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
                 # Assign the flight to this slot
                 available_slots[i][1] = hash(flight.callsign) % 10000  # Use hash of callsign as flight ID
                 available_slots[i][2] = hash(flight.callsign[:3]) % 1000  # Use airline code hash as airline ID
-                
+
                 # Calculate delay
                 delay_minutes = slot_time - original_eta
                 flight.assigned_slot_time = slot_time
                 flight.assigned_delay = delay_minutes
+
+                # Compute cost for this flight with the assigned delay
+                flight.assigned_cost = flight.compute_costs(delay_minutes, air_costs, ground_no_reac_costs, ground_costs, flight_data)
+
                 # increment assigned count for the hour
                 assigned_count_by_hour[slot_hour] = assigned_count_by_hour.get(slot_hour, 0) + 1
                 flight.assigned_slot_index = i
-                
+
                 # Assign delay type based on exemption status
                 if is_exempt:
                     available_slots[i][3] = delay_minutes  # Air delay
@@ -556,11 +570,11 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
                 else:
                     available_slots[i][3] = 0  # No air delay
                     available_slots[i][4] = delay_minutes  # Ground delay
-                
+
                 return True
-        
+
         return False
-    
+
     # Assign exempt flights first (those needing Air delay)
     assigned_exempt = 0
     for flight in exempt_flights_needing_slots:
@@ -568,7 +582,9 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
             assigned_exempt += 1
         else:
             print(f"Warning: Could not assign slot to exempt flight {flight.callsign}")
-    
+            # Even if not assigned a slot, compute cost with 0 delay
+            flight.assigned_cost = flight.compute_costs(0, air_costs, ground_no_reac_costs, ground_costs, flight_data)
+
     # Assign controlled flights second (those needing Ground delay)
     assigned_controlled = 0
     for flight in controlled_flights_needing_slots:
@@ -576,10 +592,15 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
             assigned_controlled += 1
         else:
             print(f"Warning: Could not assign slot to controlled flight {flight.callsign}")
-    
+            # Even if not assigned a slot, compute cost with 0 delay
+            flight.assigned_cost = flight.compute_costs(0, air_costs, ground_no_reac_costs, ground_costs, flight_data)
+
     # Update the original slots matrix
     slots[:] = available_slots[:]
-    
+
+    # Calculate total costs
+    total_costs = sum(flight.assigned_cost for flight in slotted_arrivals)
+
     # Print assignment summary
     print("Slot assignment completed:")
     print(f"  Exempt flights assigned: {assigned_exempt}/{len(exempt_flights_needing_slots)}")
@@ -587,20 +608,18 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     print(f"  Total flights needing slots: {len(flights_needing_slots)}")
     print(f"  Total flights assigned: {assigned_exempt + assigned_controlled}/{len(flights_needing_slots)}")
     print(f"  Flights keeping original schedule: {len(flights_not_needing_slots)}")
-    
+    print(f"  Total costs: ${total_costs:,.2f}")
+
     # Calculate delay statistics
     total_air_delay = sum(flight.assigned_delay for flight in exempt_flights_needing_slots if hasattr(flight, 'assigned_delay'))
     total_ground_delay = sum(flight.assigned_delay for flight in controlled_flights_needing_slots if hasattr(flight, 'assigned_delay'))
-    
+
     print(f"  Total air delay: {total_air_delay} minutes")
     print(f"  Total ground delay: {total_ground_delay} minutes")
     print(f"  Average air delay: {total_air_delay/len(exempt_flights_needing_slots):.1f} minutes" if exempt_flights_needing_slots else "  No exempt flights needing slots")
     print(f"  Average ground delay: {total_ground_delay/len(controlled_flights_needing_slots):.1f} minutes" if controlled_flights_needing_slots else "  No controlled flights needing slots")
-    # Compute standard deviation and relative standard deviation (RSD)
-    # Use sample standard deviation (ddof=1) when there are >=2 samples, otherwise std = 0
-    air_delays_list = [flight.assigned_delay for flight in exempt_flights_needing_slots if hasattr(flight, 'assigned_delay')]
-    ground_delays_list = [flight.assigned_delay for flight in controlled_flights_needing_slots if hasattr(flight, 'assigned_delay')]
 
+    # Compute standard deviation and relative standard deviation (RSD)
     def stats_with_rsd(values: list[int]) -> tuple[float, float, float]:
         """Return (count, std, rsd_percent). std uses sample std when possible."""
         if not values:
@@ -612,6 +631,9 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
         rsd = (std / mean * 100.0) if mean != 0 else 0.0
         return count, std, rsd
 
+    air_delays_list = [flight.assigned_delay for flight in exempt_flights_needing_slots if hasattr(flight, 'assigned_delay')]
+    ground_delays_list = [flight.assigned_delay for flight in controlled_flights_needing_slots if hasattr(flight, 'assigned_delay')]
+
     air_count, air_std, air_rsd = stats_with_rsd(air_delays_list)
     ground_count, ground_std, ground_rsd = stats_with_rsd(ground_delays_list)
 
@@ -620,8 +642,10 @@ def assignSlotsGDP(filtered_arrivals: list[Flight], slots: np.ndarray) -> list[F
     if ground_count:
         print(f"  Ground delays: N={ground_count}, Std={ground_std:.1f} min, RSD={ground_rsd:.1f}%")
 
-    
+    print(f" Total costs: ${total_costs:,.2f}")
+
     return slotted_arrivals
+
 
 
 def enforce_capacity(slots: np.ndarray, slotted_arrivals: list[Flight], HStart: int, HEnd: int,
@@ -991,21 +1015,17 @@ def print_delay_statistics(slotted_flights: list[Flight]) -> None:
 
 # FUNCTION TO COMPUTE RF VECTOR FOR GHP (RF = 1, RF = EMISSIONS, RF = COSTS)
 def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: int,
-                slot_times: list[int]) -> np.ndarray:
+                slot_times: list[int], air_costs: pd.DataFrame, ground_no_reac_costs: pd.DataFrame,
+                ground_costs: pd.DataFrame, flight_data: pd.DataFrame) -> np.ndarray:
 
     penalty_const = 1e12  # penalty definition
     index_count = slot_no * flight_no  # number of possible combination for slot assignment
     r_f = np.zeros(index_count)  # first we set rf vector as all zeros
-    cost_arr = np.ones(index_count)
 
     index = 0
-    air_costs = pd.read_csv("Data/AirCosts.csv")  # call the table for air delay costs
-    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")  # call the table for ground not reactionary delay
-    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")  # call the table for ground reactionary delay
-    flight_data = pd.read_csv("Data/LEBL_10AUG2025_ECAC.csv", delimiter=";", encoding='latin-1')
 
     # for each flight we iterate through the matrix of possible combinations
-    for i in range(flight_no):
+    for i in tqdm(range(flight_no), desc="Computing r_f"):
         flight = flights[i]  # Get the current flight
         original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute  # original ETA to minutes
 
@@ -1039,10 +1059,7 @@ def compute_r_f(flights: list[Flight], objective: str, slot_no: int, flight_no: 
     return r_f
 
 
-
-
-
-def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = Literal["delay", "emissions", "costs"]):
+def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, hstart: int, objective=Literal["delay", "emissions", "costs"]):
     """
     Solve GHP as an integer program:
       - filtered_arrivals: list of Flight objects (they must have .delay_type, .arr_time, .seats, etc.)
@@ -1053,6 +1070,12 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
       - objective: 'delay' or 'emissions'
     Returns: list of flights with assigned_slot_time and assigned_delay updated (same convention que assignSlotsGDP)
     """
+
+    air_costs = pd.read_csv("Data/AirCosts.csv")  # call the table for air delay costs
+    ground_no_reac_costs = pd.read_csv("Data/Ground without reactionary costs.csv")  # call the table for ground not reactionary delay
+    ground_costs = pd.read_csv("Data/Ground with reactionary costs.csv")  # call the table for ground reactionary delay
+    flight_data = pd.read_csv("Data/LEBL_10AUG2025_ECAC.csv", delimiter=";", encoding='latin-1')
+
 
     # Select flights that need slot assignment (Air or Ground)
     flights_needing_slots = [f for f in filtered_arrivals if f.delay_type in ("Air", "Ground")]
@@ -1067,8 +1090,9 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
     slot_times = [int(s[0]) for s in slots]  # minutes
     n_s = len(slot_times)
 
-    #computation of rf vector (ALREADY COMPUTED AS A COST VECTOR)
-    r_f = compute_r_f(flights_needing_slots, str(objective), n_s, n_f, slot_times)
+    # computation of rf vector (ALREADY COMPUTED AS A COST VECTOR)
+    r_f = compute_r_f(flights_needing_slots, str(objective), n_s, n_f, slot_times, air_costs, ground_no_reac_costs,
+                      ground_costs, flight_data)
 
     # Number of variables: n_f * n_s
     n_vars = n_f * n_s
@@ -1090,58 +1114,176 @@ def compute_GHP(filtered_arrivals: list[Flight], slots: np.ndarray, objective = 
 
     # Solve as integer program thanks to SCIPY LIBRARY
     result = linprog(r_f, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq,
-                     bounds=(0, 1), method='highs', integrality=1)  # INTEGER VARIABLES: integrality = 1, Binary variables: ub = 1, lb = 0
+                     bounds=(0, 1), method='highs',
+                     integrality=1)  # INTEGER VARIABLES: integrality = 1, Binary variables: ub = 1, lb = 0
 
     if result.success:
         print("Optimization successful!")
 
-        # Print assignment results with delays
-        print("\nASSIGNMENTS & DELAYS:")
-        print("=" * 60)
-        total_air_delay = 0  # accumulative total air delay summarying each particular air delay
-        total_ground_delay = 0  # accumulative total ground delay summarying each particular ground delay
+        # Collect assignment results for sorting and statistics
+        assignments = []
+        total_air_delay = 0
+        total_ground_delay = 0
+        total_emissions = 0
+        total_costs = 0
+        total_unrec_delay = 0
+
+        # Lists for statistics calculation
+        air_delays = []
+        ground_delays = []
+        total_delays = []
+        all_flights_delays = []  # For "All Flights" column (includes all regulated flights)
 
         for i in range(n_f):
             for j in range(n_s):
                 var_index = i * n_s + j
-                if abs(result.x[var_index] - 1) < 1e-6:  # if found that a flight f assigned to slot t (1-1 just to avoid problems)
-                    flight = flights_needing_slots[i]  # flight designated with del type "ground" or "air".
+                if abs(result.x[var_index] - 1) < 1e-6:
+                    flight = flights_needing_slots[i]
+                    callsign = getattr(flight, 'callsign', f'Flight{i + 1}')
 
-                    callsign = getattr(flight, 'callsign', f'Flight{i + 1}')  # get callsign for possible reactionary delay
+                    # Get original arrival time
+                    original_arrival = flight.arr_time
+                    original_arr_str = f"{original_arrival.hour:02d}:{original_arrival.minute:02d}"
 
-                    # Calculate delays
-                    original_arrival = flight.arr_time.hour * 60 + flight.arr_time.minute  # ETA to minutes
+                    # Calculate delays and new arrival time
+                    original_arrival_minutes = original_arrival.hour * 60 + original_arrival.minute
                     slot_time = slot_times[j]
-                    total_delay = max(0, slot_time - original_arrival) # -> DELAY = CTA (slot time) - ETA (original arrival time)
+                    total_delay = max(0, slot_time - original_arrival_minutes)
+                    total_unrec_delay += flight.computeunrecdel(total_delay, hstart)
 
+                    # Convert slot time back to time format for new arrival
+                    slot_hour = slot_time // 60
+                    slot_minute = slot_time % 60
+                    new_arr_str = f"{slot_hour:02d}:{slot_minute:02d}"
                     # Split delay based on delay type
                     if flight.delay_type == "Air":
-                        air_delay = total_delay  # all is air delay
-                        ground_delay = 0  # not ground delay
+                        air_delay = total_delay
+                        ground_delay = 0
+                        total_emissions += flight.compute_air_del_emissions(air_delay, "delay") * air_delay
                     else:  # "Ground"
-                        air_delay = 0  # not air delay
-                        ground_delay = total_delay  # all is ground delay
+                        air_delay = 0
+                        ground_delay = total_delay
+                        total_emissions += flight.compute_ground_del_emissions(ground_delay)
 
-                    # Update totals
+                    total_costs += flight.compute_costs(total_delay, air_costs,ground_no_reac_costs,
+                                                        ground_costs, flight_data)
+
+                    # Update totals and lists for statistics
                     total_air_delay += air_delay
                     total_ground_delay += ground_delay
 
-                    print(f"{callsign} → Slot {j + 1} | "
-                          f"Air: {air_delay:3d}min | "
-                          f"Ground: {ground_delay:3d}min | "
-                          f"Total: {total_delay:3d}min")
+                    # For "All Flights" - include all regulated flights
+                    all_flights_delays.append(total_delay)
+
+                    # For specific delay types - only include flights with that type of delay
+                    if flight.delay_type == "Air":
+                        air_delays.append(air_delay)
+                    else:  # "Ground"
+                        ground_delays.append(ground_delay)
+
+                    total_delays.append(total_delay)
+
+                    # Store assignment for sorting
+                    assignments.append({
+                        'slot_index': j,
+                        'slot_time': slot_time,
+                        'callsign': callsign,
+                        'original_arr': original_arr_str,
+                        'new_arr': new_arr_str,
+                        'air_delay': air_delay,
+                        'ground_delay': ground_delay,
+                        'total_delay': total_delay,
+                        'flight_obj': flight
+                    })
+
+        # Sort assignments by slot time
+        assignments.sort(key=lambda x: x['slot_time'])
+
+        # Print assignment results sorted by slots
+        print("\nARRIVAL ASSIGNMENTS & DELAYS (SORTED BY SLOT TIME):")
+        print("=" * 85)
+        print(
+            f"{'Slot':4s} {'Callsign':12s} {'Orig Arr':8s} {'New Arr':8s} {'Air Delay':9s} {'Gnd Delay':9s} {'Total Delay':11s}")
+        print("-" * 85)
+        for assignment in assignments:
+            print(
+                f"{assignment['slot_index'] + 1:4d} {assignment['callsign']:12s} {assignment['original_arr']:8s} {assignment['new_arr']:8s} "
+                f"{assignment['air_delay']:4d} min   {assignment['ground_delay']:4d} min   {assignment['total_delay']:4d} min")
 
         # Print summary
-        print("=" * 60)
+        print("=" * 85)
         print(f"TOTALS: "
               f"Air: {total_air_delay:3d}min | "
               f"Ground: {total_ground_delay:3d}min | "
               f"Total: {total_air_delay + total_ground_delay:3d}min")
+        print(f"TOTAL EMISSIONS = {total_emissions} kg CO2")
+        print(f"TOTAL COST = {total_costs} (2014) €")
+        print(f"UNRECOVERABLE DELAY = {total_unrec_delay} min" )
+
+        # Calculate statistics
+        def calculate_statistics(delays):
+            if not delays:
+                return {
+                    'count': 0,
+                    'total': 0,
+                    'mean': 0,
+                    'median': 0,
+                    'std': 0,
+                    'rel_std': 0,
+                    'min': 0,
+                    'max': 0
+                }
+
+            count = len(delays)
+            total = sum(delays)
+            mean = total / count if count > 0 else 0
+            median = np.median(delays)
+            std = np.std(delays) if count > 1 else 0
+            rel_std = (std / mean * 100) if mean > 0 else 0
+            min_delay = min(delays)
+            max_delay = max(delays)
+
+            return {
+                'count': count,
+                'total': total,
+                'mean': mean,
+                'median': median,
+                'std': std,
+                'rel_std': rel_std,
+                'min': min_delay,
+                'max': max_delay
+            }
+
+        # Calculate statistics for each category
+        all_stats = calculate_statistics(all_flights_delays)
+        air_stats = calculate_statistics(air_delays)
+        ground_stats = calculate_statistics(ground_delays)
+
+        # Print detailed statistics
+        print("\nDELAY STATISTICS:")
+        print("=" * 100)
+        print(f"{'Metric':25s} {'All Flights':>12s} {'Air Delay':>12s} {'Ground Delay':>12s}")
+        print("-" * 100)
+        print(f"{'Count':25s} {all_stats['count']:12d} {air_stats['count']:12d} {ground_stats['count']:12d}")
+        print(
+            f"{'Total delay (min)':25s} {all_stats['total']:12.1f} {air_stats['total']:12.1f} {ground_stats['total']:12.1f}")
+        print(
+            f"{'Mean delay (min)':25s} {all_stats['mean']:12.2f} {air_stats['mean']:12.2f} {ground_stats['mean']:12.2f}")
+        print(
+            f"{'Median delay (min)':25s} {all_stats['median']:12.2f} {air_stats['median']:12.2f} {ground_stats['median']:12.2f}")
+        print(
+            f"{'Std deviation (min)':25s} {all_stats['std']:12.2f} {air_stats['std']:12.2f} {ground_stats['std']:12.2f}")
+        print(
+            f"{'Rel std dev (%)':25s} {all_stats['rel_std']:12.2f} {air_stats['rel_std']:12.2f} {ground_stats['rel_std']:12.2f}")
+        print(
+            f"{'Minimum delay (min)':25s} {all_stats['min']:12.1f} {air_stats['min']:12.1f} {ground_stats['min']:12.1f}")
+        print(
+            f"{'Maximum delay (min)':25s} {all_stats['max']:12.1f} {air_stats['max']:12.1f} {ground_stats['max']:12.1f}")
 
     else:
         print("Optimization failed:", result.message)
 
-    return filtered_arrivals  # return of the updated list. #TODO
+    return filtered_arrivals
 
 
 
@@ -1165,7 +1307,7 @@ def compute_Rail_Emissions_D2DTime(filtered_arrivals: list['Flight']):
     return rail_trips, total_rail_emissions, D2D_rail_time
 
 # FUNCTION THAT COMPUTE THE RAIL EMISSIONS OF THE FLIGHTS THAT COULD not BE REPLACED BY A LESS THAN 6 HOUR DIRECT TRAIN ROUTE FROM BCN
-def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight'], delay: int):
+def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight']):
     airports = ["LEMD", "LFML", "LEZL", "LEMG", "LFLL", "LEAL"]
     flight_trips = [f for f in filtered_arrivals if f.departure_airport not in airports] #LIST OF ARIPORTS OF CITIES THAT do not HAVE A POSSIBLE DIRECT TRAIN ROUTE FROM BARCELONA.
     flight_trip_time = [164, 153, 178, 181, 183, 161] #We later sum 150' for the D2D time
@@ -1178,7 +1320,7 @@ def compute_Flight_Emissions_D2DTime(filtered_arrivals: list['Flight'], delay: i
         for i in range(len(airports)):
             if f.departure_airport == airports[i]:
                 total_flight_emissions += flight_emissions[i] # look for the emissions that correspond to the route and add it to the global computation
-                D2D_aircraft_time += (flight_trip_time[i] + 150 + delay) # look for the time that correspond to the route and add it to the total.
+                D2D_aircraft_time += (flight_trip_time[i] + 150) # look for the time that correspond to the route and add it to the total.
     return flight_trips, total_flight_emissions, D2D_aircraft_time
 
 def plot_train_vs_flight_emissions_times():
@@ -1194,7 +1336,7 @@ def plot_train_vs_flight_emissions_times():
     width = 0.35
 
     # Crear figura
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    _, ax1 = plt.subplots(figsize=(10, 6))
 
     # Barras de emisiones
     ax1.bar(x - width/2, rail_emissions, width, label='Rail CO₂ (kg)')
@@ -1289,10 +1431,8 @@ def plot_hfile_analysis(arrival_flights: list[Flight], distThreshold: int, HStar
                 air_emissions += flight.compute_air_del_emissions(delay, "delay")
             elif delay_type == "Ground":
                 total_ground_delay += delay
-                if delay > 60:
-                    ground_emissions += flight.compute_ground_del_emissions(delay) / 9
-                else:
-                    ground_emissions += flight.compute_ground_del_emissions(delay)
+                ground_emissions += flight.compute_ground_del_emissions(delay)
+
         
         # Store metrics
         air_delays.append(total_air_delay)
@@ -1420,10 +1560,8 @@ def plot_distance_threshold_analysis(arrival_flights: list[Flight], HFile: int, 
                 air_emissions += flight.compute_air_del_emissions(delay, "delay")
             elif delay_type == "Ground":
                 total_ground_delay += delay
-                if delay > 60:
-                    ground_emissions += flight.compute_ground_del_emissions(delay) / 9
-                else:
-                    ground_emissions += flight.compute_ground_del_emissions(delay)
+                ground_emissions += flight.compute_ground_del_emissions(delay)
+
         
         # Store metrics
         air_delays.append(total_air_delay)
